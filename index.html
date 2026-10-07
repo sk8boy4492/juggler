@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ジャグラー設定予想</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <h1>ジャグラー設定予想</h1>
+      <div class="store-switcher">
+        <label for="store-switcher">店舗</label>
+        <select id="store-switcher"></select>
+      </div>
+      <nav class="main-nav">
+        <button type="button" class="nav-btn" data-tab="input">データ入力</button>
+        <button type="button" class="nav-btn" data-tab="machines">台番登録</button>
+        <button type="button" class="nav-btn" data-tab="stores">店舗管理</button>
+        <button type="button" class="nav-btn" data-tab="models">機種マスタ</button>
+        <button type="button" class="nav-btn" data-tab="settings">設定</button>
+      </nav>
+    </aside>
+    <main>
+      <section id="screen-input" class="screen"></section>
+      <section id="screen-machines" class="screen" hidden></section>
+      <section id="screen-stores" class="screen" hidden></section>
+      <section id="screen-models" class="screen" hidden></section>
+      <section id="screen-settings" class="screen" hidden></section>
+    </main>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="./db.js"></script>
+  <script src="./models-data.js"></script>
+  <script src="./claude-api.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
