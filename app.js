@@ -443,7 +443,7 @@ const App = {
     root.innerHTML = `
       <section class="card">
         <h2>イベント日登録 - ${esc(store.name)}</h2>
-        <p class="hint">末尾の日・ゾロ目・記念日など、店舗の傾向を見たい日を登録しておくと、「特定日予想」画面で自動的に過去の実績と比較できます。</p>
+        <p class="hint">末尾の日・ゾロ目・記念日など、店舗の傾向を見たい日を登録しておくと、「狙い台予想」画面で自動的に過去の実績と比較できます。</p>
         <div id="event-list"></div>
         <h3>追加</h3>
         <form id="event-form" class="form-row">
@@ -532,7 +532,7 @@ const App = {
     );
   },
 
-  // ---------- 特定日予想 ----------
+  // ---------- 狙い台予想 ----------
   renderTomorrowScreen() {
     const root = document.getElementById("screen-tomorrow");
     const store = this.currentStore();
@@ -543,7 +543,7 @@ const App = {
     const tomorrow = Events.nextDate(todayStr());
     root.innerHTML = `
       <section class="card">
-        <h2>特定日予想 - ${esc(store.name)}</h2>
+        <h2>狙い台予想 - ${esc(store.name)}</h2>
         <p class="hint">対象日を選ぶと、該当するイベント日を判定し、過去の同条件の日のデータを積み上げて「平均してどの台が高設定らしいか」を予想します。</p>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="tomorrow-date" value="${tomorrow}" /></div>
