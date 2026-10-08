@@ -2,13 +2,14 @@
 "use strict";
 
 const DB_NAME = "juggler-predict-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   stores: "stores", // 店舗
   models: "models", // 機種マスタ(設定差スペック)
   machines: "machines", // 店舗ごとの台番登録
   records: "records", // 日別データ(総回転・BIG・REG・差枚)
+  eventRules: "eventRules", // 店舗ごとのイベント日(特定日)登録ルール
 };
 
 function genId() {
@@ -38,6 +39,10 @@ function openDb() {
         const s = db.createObjectStore(STORES.records, { keyPath: "id" });
         s.createIndex("storeId", "storeId", { unique: false });
         s.createIndex("machineId", "machineId", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORES.eventRules)) {
+        const s = db.createObjectStore(STORES.eventRules, { keyPath: "id" });
+        s.createIndex("storeId", "storeId", { unique: false });
       }
     };
     req.onsuccess = () => resolve(req.result);

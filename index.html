@@ -15,8 +15,10 @@
         <select id="store-switcher"></select>
       </div>
       <nav class="main-nav">
+        <button type="button" class="nav-btn" data-tab="tomorrow">明日の準備</button>
         <button type="button" class="nav-btn" data-tab="input">データ入力</button>
         <button type="button" class="nav-btn" data-tab="analysis">分析</button>
+        <button type="button" class="nav-btn" data-tab="events">イベント日</button>
         <button type="button" class="nav-btn" data-tab="machines">台番登録</button>
         <button type="button" class="nav-btn" data-tab="stores">店舗管理</button>
         <button type="button" class="nav-btn" data-tab="models">機種マスタ</button>
@@ -24,8 +26,10 @@
       </nav>
     </aside>
     <main>
-      <section id="screen-input" class="screen"></section>
+      <section id="screen-tomorrow" class="screen"></section>
+      <section id="screen-input" class="screen" hidden></section>
       <section id="screen-analysis" class="screen" hidden></section>
+      <section id="screen-events" class="screen" hidden></section>
       <section id="screen-machines" class="screen" hidden></section>
       <section id="screen-stores" class="screen" hidden></section>
       <section id="screen-models" class="screen" hidden></section>
@@ -39,6 +43,7 @@
   <script src="./models-data.js"></script>
   <script src="./claude-api.js"></script>
   <script src="./analysis.js"></script>
+  <script src="./events.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

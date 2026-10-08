@@ -3,13 +3,14 @@
 
 const App = {
   state: {
-    tab: "input",
+    tab: "tomorrow",
     currentStoreId: null,
     pending: { files: [], results: [], date: todayStr() }, // データ入力画面の作業中データ
   },
   stores: [],
   models: [],
   machines: [], // 現在選択中の店舗の台番登録一覧
+  eventRules: [], // 現在選択中の店舗のイベント日登録一覧
 
   async init() {
     this.stores = await DB.getAll(DB.STORES.stores);
@@ -26,17 +27,26 @@ const App = {
       this.state.currentStoreId = this.stores[0].id;
     }
 
-    await this.loadMachinesForCurrentStore();
+    await this.loadStoreScopedData();
 
     this.bindNav();
     document.getElementById("store-switcher").addEventListener("change", async (e) => {
       this.state.currentStoreId = e.target.value || null;
       localStorage.setItem("juggler_current_store_id", this.state.currentStoreId || "");
-      await this.loadMachinesForCurrentStore();
+      await this.loadStoreScopedData();
       this.render();
     });
 
     this.render();
+  },
+
+  async loadStoreScopedData() {
+    await this.loadMachinesForCurrentStore();
+    if (!this.state.currentStoreId) {
+      this.eventRules = [];
+      return;
+    }
+    this.eventRules = await DB.getAllByIndex(DB.STORES.eventRules, "storeId", this.state.currentStoreId);
   },
 
   async loadMachinesForCurrentStore() {
@@ -81,7 +91,9 @@ const App = {
 
     this.renderStoreSwitcher();
 
+    if (this.state.tab === "tomorrow") this.renderTomorrowScreen();
     if (this.state.tab === "analysis") this.renderAnalysisScreen();
+    if (this.state.tab === "events") this.renderEventsScreen();
     if (this.state.tab === "stores") this.renderStoresScreen();
     if (this.state.tab === "models") this.renderModelsScreen();
     if (this.state.tab === "machines") this.renderMachinesScreen();
@@ -136,7 +148,7 @@ const App = {
       if (!this.state.currentStoreId) {
         this.state.currentStoreId = store.id;
         localStorage.setItem("juggler_current_store_id", store.id);
-        await this.loadMachinesForCurrentStore();
+        await this.loadStoreScopedData();
       }
       form.reset();
       form.elements.islandSize.value = 20;
@@ -206,12 +218,14 @@ const App = {
       for (const r of records) await DB.delete(DB.STORES.records, r.id);
       await DB.delete(DB.STORES.machines, m.id);
     }
+    const rules = await DB.getAllByIndex(DB.STORES.eventRules, "storeId", id);
+    for (const r of rules) await DB.delete(DB.STORES.eventRules, r.id);
     await DB.delete(DB.STORES.stores, id);
     this.stores = this.stores.filter((s) => s.id !== id);
     if (this.state.currentStoreId === id) {
       this.state.currentStoreId = this.stores.length ? this.stores[0].id : null;
       localStorage.setItem("juggler_current_store_id", this.state.currentStoreId || "");
-      await this.loadMachinesForCurrentStore();
+      await this.loadStoreScopedData();
     }
     this.render();
     this.toast("削除しました");
@@ -365,10 +379,17 @@ const App = {
     const tbody = document.getElementById("analysis-tbody");
     if (!tbody) return;
     const date = document.getElementById("analysis-date").value;
-    const weights = Analysis.loadWeights();
     const recordsForDate = (this._analysisRecords || []).filter((r) => r.date === date);
+    const rows = this.buildEstimationRows(recordsForDate);
+    tbody.innerHTML = rows.length
+      ? rows.map((row) => this.estimationRowHtml(row)).join("")
+      : '<tr><td colspan="9" class="hint">この日のデータがありません</td></tr>';
+  },
 
-    const rows = recordsForDate.map((r) => {
+  // 台データの配列(records)から、機種マスタと照合して設定推定つきの行データを作る(期待値の高い順)。
+  buildEstimationRows(records) {
+    const weights = Analysis.loadWeights();
+    const rows = records.map((r) => {
       const machine = this.machines.find((m) => m.id === r.machineId);
       const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
       const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
@@ -376,33 +397,225 @@ const App = {
       const highProb = Analysis.highSettingProb(probs);
       return { r, machine, model, probs, expected, highProb };
     });
-
     rows.sort((a, b) => (b.expected ?? -1) - (a.expected ?? -1));
+    return rows;
+  },
 
-    if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="hint">この日のデータがありません</td></tr>';
+  estimationRowHtml({ r, machine, model, probs, expected, highProb }) {
+    const breakdown = probs
+      ? [1, 2, 3, 4, 5, 6].map((s) => (probs[s] != null ? Math.round(probs[s] * 100) : "-")).join(" / ")
+      : "計算不可";
+    const diffClass = r.diff == null ? "" : r.diff >= 0 ? "diff-pos" : "diff-neg";
+    return `<tr>
+      <td>${machine ? machine.number : "(削除済み)"}</td>
+      <td>${model ? esc(model.name) : "-"}</td>
+      <td>${r.totalSpins ?? "-"}</td>
+      <td>${r.big ?? "-"}</td>
+      <td>${r.reg ?? "-"}</td>
+      <td class="${diffClass}">${r.diff ?? "-"}</td>
+      <td><strong>${expected != null ? expected.toFixed(2) : "-"}</strong></td>
+      <td>${highProb != null ? Math.round(highProb * 100) + "%" : "-"}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${breakdown}</td>
+    </tr>`;
+  },
+
+  estimationTableHtml(rows, emptyMessage) {
+    const body = rows.length
+      ? rows.map((row) => this.estimationRowHtml(row)).join("")
+      : `<tr><td colspan="9" class="hint">${esc(emptyMessage || "データがありません")}</td></tr>`;
+    return `
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th>期待設定値</th><th>高設定らしさ</th><th>設定別の内訳(1→6)</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+  },
+
+  // ---------- イベント日(特定日) ----------
+  renderEventsScreen() {
+    const root = document.getElementById("screen-events");
+    const store = this.currentStore();
+    if (!store) {
+      root.innerHTML = '<section class="card"><p class="hint">先に店舗管理タブから店舗を登録してください。</p></section>';
       return;
     }
+    root.innerHTML = `
+      <section class="card">
+        <h2>イベント日登録 - ${esc(store.name)}</h2>
+        <p class="hint">末尾の日・ゾロ目・記念日など、店舗の傾向を見たい日を登録しておくと、「明日の準備」画面で自動的に過去の実績と比較できます。</p>
+        <div id="event-list"></div>
+        <h3>追加</h3>
+        <form id="event-form" class="form-row">
+          <div class="field"><label>名前</label><input type="text" name="name" required placeholder="例: 周年祭" style="width:140px" /></div>
+          <div class="field">
+            <label>種類</label>
+            <select name="kind" id="event-kind-select">
+              <option value="specific">単発の特定日</option>
+              <option value="monthlyDay">毎月同じ日</option>
+              <option value="daySuffix">末尾の日</option>
+              <option value="annual">毎年の記念日</option>
+            </select>
+          </div>
+          <div id="event-params" class="form-row" style="margin-bottom:0"></div>
+          <button type="submit" class="btn">追加する</button>
+        </form>
+      </section>
+    `;
+    this.renderEventList();
 
-    tbody.innerHTML = rows
-      .map(({ r, machine, model, probs, expected, highProb }) => {
-        const breakdown = probs
-          ? [1, 2, 3, 4, 5, 6].map((s) => (probs[s] != null ? Math.round(probs[s] * 100) : "-")).join(" / ")
-          : "計算不可";
-        const diffClass = r.diff == null ? "" : r.diff >= 0 ? "diff-pos" : "diff-neg";
-        return `<tr>
-          <td>${machine ? machine.number : "(削除済み)"}</td>
-          <td>${model ? esc(model.name) : "-"}</td>
-          <td>${r.totalSpins ?? "-"}</td>
-          <td>${r.big ?? "-"}</td>
-          <td>${r.reg ?? "-"}</td>
-          <td class="${diffClass}">${r.diff ?? "-"}</td>
-          <td><strong>${expected != null ? expected.toFixed(2) : "-"}</strong></td>
-          <td>${highProb != null ? Math.round(highProb * 100) + "%" : "-"}</td>
-          <td style="font-size:11px;color:var(--text-muted)">${breakdown}</td>
-        </tr>`;
-      })
+    const kindSelect = document.getElementById("event-kind-select");
+    const renderParams = () => {
+      const area = document.getElementById("event-params");
+      const kind = kindSelect.value;
+      if (kind === "specific") {
+        area.innerHTML = `<div class="field"><label>日付</label><input type="date" name="p-date" required /></div>`;
+      } else if (kind === "monthlyDay") {
+        area.innerHTML = `<div class="field"><label>日(1〜31)</label><input type="number" name="p-day" min="1" max="31" required style="width:70px" /></div>`;
+      } else if (kind === "daySuffix") {
+        area.innerHTML = `<div class="field"><label>末尾(0〜9)</label><input type="number" name="p-suffix" min="0" max="9" required style="width:70px" /></div>`;
+      } else if (kind === "annual") {
+        area.innerHTML = `
+          <div class="field"><label>月</label><input type="number" name="p-month" min="1" max="12" required style="width:70px" /></div>
+          <div class="field"><label>日</label><input type="number" name="p-day2" min="1" max="31" required style="width:70px" /></div>`;
+      }
+    };
+    kindSelect.addEventListener("change", renderParams);
+    renderParams();
+
+    document.getElementById("event-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const name = form.elements.name.value.trim();
+      const kind = form.elements.kind.value;
+      if (!name) return;
+      let params = {};
+      if (kind === "specific") params = { date: form.elements["p-date"].value };
+      else if (kind === "monthlyDay") params = { day: Number(form.elements["p-day"].value) };
+      else if (kind === "daySuffix") params = { suffix: Number(form.elements["p-suffix"].value) };
+      else if (kind === "annual") params = { month: Number(form.elements["p-month"].value), day: Number(form.elements["p-day2"].value) };
+
+      const rule = { id: DB.genId(), storeId: store.id, name, kind, params };
+      await DB.add(DB.STORES.eventRules, rule);
+      this.eventRules.push(rule);
+      form.reset();
+      renderParams();
+      this.renderEventList();
+      this.toast("追加しました");
+    });
+  },
+
+  renderEventList() {
+    const container = document.getElementById("event-list");
+    if (!this.eventRules.length) {
+      container.innerHTML = '<p class="hint">まだイベント日が登録されていません。</p>';
+      return;
+    }
+    container.innerHTML = this.eventRules
+      .map(
+        (r) => `
+      <div class="list-row" data-id="${r.id}">
+        <div><strong>${esc(r.name)}</strong> <span class="badge">${esc(Events.describeRule(r))}</span></div>
+        <div class="list-row-actions"><button type="button" class="btn btn-danger btn-sm delete-event-rule">削除</button></div>
+      </div>`
+      )
       .join("");
+    container.querySelectorAll(".delete-event-rule").forEach((btn) =>
+      btn.addEventListener("click", async (e) => {
+        const id = e.target.closest(".list-row").dataset.id;
+        if (!confirm("このイベント日の登録を削除しますか?")) return;
+        await DB.delete(DB.STORES.eventRules, id);
+        this.eventRules = this.eventRules.filter((r) => r.id !== id);
+        this.renderEventList();
+        this.toast("削除しました");
+      })
+    );
+  },
+
+  // ---------- 明日の準備 ----------
+  renderTomorrowScreen() {
+    const root = document.getElementById("screen-tomorrow");
+    const store = this.currentStore();
+    if (!store) {
+      root.innerHTML = '<section class="card"><p class="hint">先に店舗管理タブから店舗を登録してください。</p></section>';
+      return;
+    }
+    const tomorrow = Events.nextDate(todayStr());
+    root.innerHTML = `
+      <section class="card">
+        <h2>明日の準備 - ${esc(store.name)}</h2>
+        <p class="hint">対象日を選ぶと、該当するイベント日・前日のデータ・過去の同条件日の実績をまとめて確認できます。</p>
+        <div class="form-row">
+          <div class="field"><label>対象日</label><input type="date" id="tomorrow-date" value="${tomorrow}" /></div>
+        </div>
+        <div id="tomorrow-event-badges"></div>
+      </section>
+      <section class="card">
+        <h2 id="tomorrow-prev-heading">前日のデータ(設定推定)</h2>
+        <div id="tomorrow-prev-wrap"></div>
+      </section>
+      <section class="card">
+        <h2>過去の同条件日の実績</h2>
+        <div id="tomorrow-history-wrap"></div>
+      </section>
+    `;
+    document.getElementById("tomorrow-date").addEventListener("change", () => this.renderTomorrowDetails());
+    this.renderTomorrowDetails();
+  },
+
+  async renderTomorrowDetails() {
+    const store = this.currentStore();
+    const targetDate = document.getElementById("tomorrow-date").value;
+    if (!targetDate) return;
+
+    const matched = Events.matchingRules(targetDate, this.eventRules);
+    const badgeArea = document.getElementById("tomorrow-event-badges");
+    badgeArea.innerHTML = matched.length
+      ? matched.map((r) => `<span class="badge">${esc(r.name)}(${esc(Events.describeRule(r))})</span>`).join(" ")
+      : '<span class="hint">この日に該当するイベント日の登録はありません。</span>';
+
+    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
+
+    // 前日のデータ
+    const prevDate = Events.previousDate(targetDate);
+    document.getElementById("tomorrow-prev-heading").textContent = `前日(${prevDate})のデータ(設定推定)`;
+    const prevRecords = allRecords.filter((r) => r.date === prevDate);
+    const prevWrap = document.getElementById("tomorrow-prev-wrap");
+    if (!prevRecords.length) {
+      prevWrap.innerHTML = `
+        <p class="hint">${esc(prevDate)}のデータがまだありません。</p>
+        <button type="button" class="btn btn-ghost btn-sm" id="jump-to-input-btn">このデータを入力する</button>`;
+      document.getElementById("jump-to-input-btn").addEventListener("click", () => {
+        this.state.pending.date = prevDate;
+        this.state.tab = "input";
+        this.render();
+      });
+    } else {
+      prevWrap.innerHTML = this.estimationTableHtml(this.buildEstimationRows(prevRecords));
+    }
+
+    // 過去の同条件日の実績
+    const historyWrap = document.getElementById("tomorrow-history-wrap");
+    if (!matched.length) {
+      historyWrap.innerHTML = '<p class="hint">イベント日を登録すると、過去の同条件日の実績がここに表示されます。</p>';
+      return;
+    }
+    const availableDates = Array.from(new Set(allRecords.map((r) => r.date)));
+    let html = "";
+    matched.forEach((rule) => {
+      const pastDates = Events.pastMatchingDates(rule, availableDates, targetDate);
+      html += `<h3>${esc(rule.name)}(${esc(Events.describeRule(rule))})</h3>`;
+      if (!pastDates.length) {
+        html += '<p class="hint">過去のデータがまだありません。</p>';
+        return;
+      }
+      pastDates.forEach((d) => {
+        const dayRecords = allRecords.filter((r) => r.date === d);
+        html += `<h3 style="margin-top:10px;color:var(--text-primary)">${esc(d)}</h3>`;
+        html += this.estimationTableHtml(this.buildEstimationRows(dayRecords));
+      });
+    });
+    historyWrap.innerHTML = html;
   },
 
   // ---------- 台番登録 ----------
@@ -523,6 +736,8 @@ const App = {
         <h2>データ入力 - ${esc(store.name)}</h2>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="input-date" value="${this.state.pending.date}" /></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="date-today-btn">今日</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="date-yesterday-btn">昨日</button>
         </div>
         <div class="dropzone" id="dropzone">
           スクリーンショットをここにドラッグ&ドロップ、またはクリックして選択(複数可)
@@ -553,6 +768,14 @@ const App = {
 
     document.getElementById("input-date").addEventListener("change", (e) => {
       this.state.pending.date = e.target.value;
+    });
+    document.getElementById("date-today-btn").addEventListener("click", () => {
+      this.state.pending.date = todayStr();
+      document.getElementById("input-date").value = this.state.pending.date;
+    });
+    document.getElementById("date-yesterday-btn").addEventListener("click", () => {
+      this.state.pending.date = Events.previousDate(todayStr());
+      document.getElementById("input-date").value = this.state.pending.date;
     });
 
     const dropzone = document.getElementById("dropzone");
@@ -804,6 +1027,7 @@ const App = {
       models: this.models,
       machines: await DB.getAll(DB.STORES.machines),
       records,
+      eventRules: await DB.getAll(DB.STORES.eventRules),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -830,19 +1054,20 @@ const App = {
         }
         if (!confirm("現在のすべてのデータを、このファイルの内容で置き換えます。よろしいですか?")) return;
 
-        for (const name of [DB.STORES.stores, DB.STORES.models, DB.STORES.machines, DB.STORES.records]) {
+        for (const name of [DB.STORES.stores, DB.STORES.models, DB.STORES.machines, DB.STORES.records, DB.STORES.eventRules]) {
           await DB.clearAll(name);
         }
         await DB.bulkPut(DB.STORES.stores, data.stores);
         await DB.bulkPut(DB.STORES.models, data.models);
         await DB.bulkPut(DB.STORES.machines, data.machines || []);
         await DB.bulkPut(DB.STORES.records, data.records || []);
+        await DB.bulkPut(DB.STORES.eventRules, data.eventRules || []);
 
         this.stores = await DB.getAll(DB.STORES.stores);
         this.models = await DB.getAll(DB.STORES.models);
         this.state.currentStoreId = this.stores.length ? this.stores[0].id : null;
         localStorage.setItem("juggler_current_store_id", this.state.currentStoreId || "");
-        await this.loadMachinesForCurrentStore();
+        await this.loadStoreScopedData();
         this.render();
         this.toast("読み込みました");
       } catch (e) {
