@@ -81,6 +81,7 @@ const App = {
 
     this.renderStoreSwitcher();
 
+    if (this.state.tab === "analysis") this.renderAnalysisScreen();
     if (this.state.tab === "stores") this.renderStoresScreen();
     if (this.state.tab === "models") this.renderModelsScreen();
     if (this.state.tab === "machines") this.renderMachinesScreen();
@@ -305,6 +306,103 @@ const App = {
         this.toast("削除しました");
       });
     });
+  },
+
+  // ---------- 分析(設定推定) ----------
+  renderAnalysisScreen() {
+    const root = document.getElementById("screen-analysis");
+    const store = this.currentStore();
+    if (!store) {
+      root.innerHTML = '<section class="card"><p class="hint">先に店舗管理タブから店舗を登録してください。</p></section>';
+      return;
+    }
+    const weights = Analysis.loadWeights();
+    root.innerHTML = `
+      <section class="card">
+        <h2>設定推定 - ${esc(store.name)}</h2>
+        <p class="hint">BIG・REG回数と総回転数から、設定1〜6それぞれだった可能性を二項分布で計算します。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。差枚は参考情報です(計算には使っていません)。</p>
+        <div class="form-row">
+          <div class="field"><label>対象日</label><input type="date" id="analysis-date" /></div>
+          <div class="field">
+            <label>REG重視度(0〜100、数値が大きいほどREGを重視)</label>
+            <input type="number" id="reg-weight-input" min="0" max="100" value="${Math.round(weights.reg * 100)}" style="width:90px" />
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table id="analysis-table">
+            <thead>
+              <tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th>期待設定値</th><th>高設定らしさ</th><th>設定別の内訳(1→6)</th></tr>
+            </thead>
+            <tbody id="analysis-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    `;
+
+    document.getElementById("reg-weight-input").addEventListener("change", (e) => {
+      let regPct = Number(e.target.value);
+      if (Number.isNaN(regPct)) regPct = 60;
+      regPct = Math.max(0, Math.min(100, regPct));
+      e.target.value = regPct;
+      Analysis.saveWeights({ reg: regPct / 100, big: (100 - regPct) / 100 });
+      this.renderAnalysisTable();
+    });
+
+    this.setupAnalysisDateAndRender();
+  },
+
+  async setupAnalysisDateAndRender() {
+    const store = this.currentStore();
+    this._analysisRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
+    const dates = Array.from(new Set(this._analysisRecords.map((r) => r.date))).sort().reverse();
+    const dateInput = document.getElementById("analysis-date");
+    dateInput.value = dates[0] || todayStr();
+    dateInput.addEventListener("change", () => this.renderAnalysisTable());
+    this.renderAnalysisTable();
+  },
+
+  renderAnalysisTable() {
+    const tbody = document.getElementById("analysis-tbody");
+    if (!tbody) return;
+    const date = document.getElementById("analysis-date").value;
+    const weights = Analysis.loadWeights();
+    const recordsForDate = (this._analysisRecords || []).filter((r) => r.date === date);
+
+    const rows = recordsForDate.map((r) => {
+      const machine = this.machines.find((m) => m.id === r.machineId);
+      const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
+      const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
+      const expected = Analysis.expectedSetting(probs);
+      const highProb = Analysis.highSettingProb(probs);
+      return { r, machine, model, probs, expected, highProb };
+    });
+
+    rows.sort((a, b) => (b.expected ?? -1) - (a.expected ?? -1));
+
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="hint">この日のデータがありません</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows
+      .map(({ r, machine, model, probs, expected, highProb }) => {
+        const breakdown = probs
+          ? [1, 2, 3, 4, 5, 6].map((s) => (probs[s] != null ? Math.round(probs[s] * 100) : "-")).join(" / ")
+          : "計算不可";
+        const diffClass = r.diff == null ? "" : r.diff >= 0 ? "diff-pos" : "diff-neg";
+        return `<tr>
+          <td>${machine ? machine.number : "(削除済み)"}</td>
+          <td>${model ? esc(model.name) : "-"}</td>
+          <td>${r.totalSpins ?? "-"}</td>
+          <td>${r.big ?? "-"}</td>
+          <td>${r.reg ?? "-"}</td>
+          <td class="${diffClass}">${r.diff ?? "-"}</td>
+          <td><strong>${expected != null ? expected.toFixed(2) : "-"}</strong></td>
+          <td>${highProb != null ? Math.round(highProb * 100) + "%" : "-"}</td>
+          <td style="font-size:11px;color:var(--text-muted)">${breakdown}</td>
+        </tr>`;
+      })
+      .join("");
   },
 
   // ---------- 台番登録 ----------
