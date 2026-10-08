@@ -443,7 +443,7 @@ const App = {
     root.innerHTML = `
       <section class="card">
         <h2>イベント日登録 - ${esc(store.name)}</h2>
-        <p class="hint">末尾の日・ゾロ目・記念日など、店舗の傾向を見たい日を登録しておくと、「明日の準備」画面で自動的に過去の実績と比較できます。</p>
+        <p class="hint">末尾の日・ゾロ目・記念日など、店舗の傾向を見たい日を登録しておくと、「特定日予想」画面で自動的に過去の実績と比較できます。</p>
         <div id="event-list"></div>
         <h3>追加</h3>
         <form id="event-form" class="form-row">
@@ -532,7 +532,7 @@ const App = {
     );
   },
 
-  // ---------- 明日の準備 ----------
+  // ---------- 特定日予想 ----------
   renderTomorrowScreen() {
     const root = document.getElementById("screen-tomorrow");
     const store = this.currentStore();
@@ -543,24 +543,82 @@ const App = {
     const tomorrow = Events.nextDate(todayStr());
     root.innerHTML = `
       <section class="card">
-        <h2>明日の準備 - ${esc(store.name)}</h2>
-        <p class="hint">対象日を選ぶと、該当するイベント日・前日のデータ・過去の同条件日の実績をまとめて確認できます。</p>
+        <h2>特定日予想 - ${esc(store.name)}</h2>
+        <p class="hint">対象日を選ぶと、該当するイベント日を判定し、過去の同条件の日のデータを積み上げて「平均してどの台が高設定らしいか」を予想します。</p>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="tomorrow-date" value="${tomorrow}" /></div>
         </div>
         <div id="tomorrow-event-badges"></div>
       </section>
       <section class="card">
-        <h2 id="tomorrow-prev-heading">前日のデータ(設定推定)</h2>
-        <div id="tomorrow-prev-wrap"></div>
+        <h2>過去実績の平均による予想</h2>
+        <p class="hint">「データ数」は、この条件に一致した過去の日のうち、その台のデータが登録されている回数です。回数が少ないうちは参考程度に。</p>
+        <div id="tomorrow-prediction-wrap"></div>
       </section>
       <section class="card">
-        <h2>過去の同条件日の実績</h2>
+        <h2>日付ごとの内訳(根拠)</h2>
         <div id="tomorrow-history-wrap"></div>
       </section>
     `;
     document.getElementById("tomorrow-date").addEventListener("change", () => this.renderTomorrowDetails());
     this.renderTomorrowDetails();
+  },
+
+  // 過去の一致日のデータを台ごとに積み上げて、平均期待設定値などを計算する。
+  aggregatePatternForRule(rule, allRecords, availableDates, targetDate) {
+    const pastDates = Events.pastMatchingDates(rule, availableDates, targetDate);
+    const byMachine = new Map();
+
+    pastDates.forEach((d) => {
+      allRecords
+        .filter((r) => r.date === d)
+        .forEach((r) => {
+          const machine = this.machines.find((m) => m.id === r.machineId);
+          if (!machine) return;
+          const model = this.models.find((mo) => mo.id === machine.modelId);
+          const weights = Analysis.loadWeights();
+          const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
+          const expected = Analysis.expectedSetting(probs);
+          const highProb = Analysis.highSettingProb(probs);
+          if (!byMachine.has(machine.id)) byMachine.set(machine.id, { machine, model, entries: [] });
+          byMachine.get(machine.id).entries.push({ date: d, expected, highProb });
+        });
+    });
+
+    const rows = Array.from(byMachine.values()).map(({ machine, model, entries }) => {
+      const validExpected = entries.map((e) => e.expected).filter((v) => v != null);
+      const validHigh = entries.map((e) => e.highProb).filter((v) => v != null);
+      const avgExpected = validExpected.length ? validExpected.reduce((a, b) => a + b, 0) / validExpected.length : null;
+      const avgHighProb = validHigh.length ? validHigh.reduce((a, b) => a + b, 0) / validHigh.length : null;
+      const hitCount = validExpected.filter((v) => v >= 5).length;
+      return { machine, model, occurrences: entries.length, avgExpected, avgHighProb, hitCount };
+    });
+    rows.sort((a, b) => (b.avgExpected ?? -1) - (a.avgExpected ?? -1));
+    return { rows, pastDates };
+  },
+
+  patternTableHtml(rows) {
+    if (!rows.length) return '<p class="hint">過去のデータがまだありません。</p>';
+    const body = rows
+      .map(
+        ({ machine, model, occurrences, avgExpected, avgHighProb, hitCount }) => `
+      <tr>
+        <td>${machine.number}</td>
+        <td>${model ? esc(model.name) : "-"}</td>
+        <td>${occurrences}回</td>
+        <td><strong>${avgExpected != null ? avgExpected.toFixed(2) : "-"}</strong></td>
+        <td>${avgHighProb != null ? Math.round(avgHighProb * 100) + "%" : "-"}</td>
+        <td>${hitCount}/${occurrences}</td>
+      </tr>`
+      )
+      .join("");
+    return `
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>台番</th><th>機種</th><th>データ数</th><th>平均期待設定値</th><th>平均高設定らしさ</th><th>高設定だった回数</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
   },
 
   async renderTomorrowDetails() {
@@ -572,50 +630,40 @@ const App = {
     const badgeArea = document.getElementById("tomorrow-event-badges");
     badgeArea.innerHTML = matched.length
       ? matched.map((r) => `<span class="badge">${esc(r.name)}(${esc(Events.describeRule(r))})</span>`).join(" ")
-      : '<span class="hint">この日に該当するイベント日の登録はありません。</span>';
+      : '<span class="hint">この日に該当するイベント日の登録はありません。「イベント日」タブから登録してください。</span>';
 
-    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
-
-    // 前日のデータ
-    const prevDate = Events.previousDate(targetDate);
-    document.getElementById("tomorrow-prev-heading").textContent = `前日(${prevDate})のデータ(設定推定)`;
-    const prevRecords = allRecords.filter((r) => r.date === prevDate);
-    const prevWrap = document.getElementById("tomorrow-prev-wrap");
-    if (!prevRecords.length) {
-      prevWrap.innerHTML = `
-        <p class="hint">${esc(prevDate)}のデータがまだありません。</p>
-        <button type="button" class="btn btn-ghost btn-sm" id="jump-to-input-btn">このデータを入力する</button>`;
-      document.getElementById("jump-to-input-btn").addEventListener("click", () => {
-        this.state.pending.date = prevDate;
-        this.state.tab = "input";
-        this.render();
-      });
-    } else {
-      prevWrap.innerHTML = this.estimationTableHtml(this.buildEstimationRows(prevRecords));
-    }
-
-    // 過去の同条件日の実績
+    const predictionWrap = document.getElementById("tomorrow-prediction-wrap");
     const historyWrap = document.getElementById("tomorrow-history-wrap");
+
     if (!matched.length) {
-      historyWrap.innerHTML = '<p class="hint">イベント日を登録すると、過去の同条件日の実績がここに表示されます。</p>';
+      predictionWrap.innerHTML = "";
+      historyWrap.innerHTML = "";
       return;
     }
+
+    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
     const availableDates = Array.from(new Set(allRecords.map((r) => r.date)));
-    let html = "";
+
+    let predictionHtml = "";
+    let historyHtml = "";
     matched.forEach((rule) => {
-      const pastDates = Events.pastMatchingDates(rule, availableDates, targetDate);
-      html += `<h3>${esc(rule.name)}(${esc(Events.describeRule(rule))})</h3>`;
+      const { rows, pastDates } = this.aggregatePatternForRule(rule, allRecords, availableDates, targetDate);
+      predictionHtml += `<h3>${esc(rule.name)}(${esc(Events.describeRule(rule))}) - 過去${pastDates.length}回分</h3>`;
+      predictionHtml += this.patternTableHtml(rows);
+
+      historyHtml += `<h3>${esc(rule.name)}(${esc(Events.describeRule(rule))})</h3>`;
       if (!pastDates.length) {
-        html += '<p class="hint">過去のデータがまだありません。</p>';
-        return;
+        historyHtml += '<p class="hint">過去のデータがまだありません。</p>';
+      } else {
+        pastDates.forEach((d) => {
+          const dayRecords = allRecords.filter((r) => r.date === d);
+          historyHtml += `<h3 style="margin-top:10px;color:var(--text-primary)">${esc(d)}</h3>`;
+          historyHtml += this.estimationTableHtml(this.buildEstimationRows(dayRecords));
+        });
       }
-      pastDates.forEach((d) => {
-        const dayRecords = allRecords.filter((r) => r.date === d);
-        html += `<h3 style="margin-top:10px;color:var(--text-primary)">${esc(d)}</h3>`;
-        html += this.estimationTableHtml(this.buildEstimationRows(dayRecords));
-      });
     });
-    historyWrap.innerHTML = html;
+    predictionWrap.innerHTML = predictionHtml;
+    historyWrap.innerHTML = historyHtml;
   },
 
   // ---------- 台番登録 ----------
