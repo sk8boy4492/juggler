@@ -37,7 +37,7 @@ const ClaudeApi = {
     const mediaType = file.type || "image/png";
 
     const body = {
-      model: "claude-sonnet-5",
+      model: "claude-haiku-4-5",
       max_tokens: 4096,
       tool_choice: { type: "tool", name: "record_machine_data" },
       tools: [
