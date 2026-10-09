@@ -13,6 +13,14 @@ const ClaudeApi = {
     return !!this.getApiKey();
   },
 
+  // 保存されているキーの一部だけを見せる(貼り付けミスの確認用)。
+  getMaskedKey() {
+    const key = this.getApiKey();
+    if (!key) return "";
+    if (key.length <= 14) return key;
+    return `${key.slice(0, 10)}…${key.slice(-4)}(${key.length}文字)`;
+  },
+
   // Fileオブジェクトをbase64文字列(data:...を除いた部分)に変換する。
   fileToBase64(file) {
     return new Promise((resolve, reject) => {

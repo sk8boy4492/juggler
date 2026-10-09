@@ -990,11 +990,13 @@ const App = {
       <section class="card">
         <h2>Claude APIキー</h2>
         <p class="hint">このMacのブラウザ内だけに保存されます。コードやGitHubには一切含まれません。</p>
+        ${hasKey ? `<p class="hint">現在保存されているキー: <strong>${esc(ClaudeApi.getMaskedKey())}</strong></p>` : ""}
         <div class="form-row">
           <div class="field" style="flex:1">
             <label>APIキー</label>
-            <input type="password" id="api-key-input" placeholder="${hasKey ? "設定済み(変更する場合のみ入力)" : "sk-ant-..."}" style="width:100%;max-width:400px" />
+            <input type="password" id="api-key-input" placeholder="${hasKey ? "変更する場合のみ入力" : "sk-ant-..."}" style="width:100%;max-width:400px" />
           </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="toggle-key-visibility">表示</button>
           <button type="button" class="btn" id="save-key-btn">保存</button>
           ${hasKey ? '<button type="button" class="btn btn-danger" id="clear-key-btn">削除</button>' : ""}
         </div>
@@ -1011,6 +1013,12 @@ const App = {
       </section>
     `;
 
+    document.getElementById("toggle-key-visibility").addEventListener("click", (e) => {
+      const input = document.getElementById("api-key-input");
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      e.target.textContent = show ? "隠す" : "表示";
+    });
     document.getElementById("save-key-btn").addEventListener("click", () => {
       const v = document.getElementById("api-key-input").value.trim();
       if (!v) {
