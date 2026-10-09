@@ -541,8 +541,11 @@ const App = {
         <div id="tomorrow-event-badges"></div>
       </section>
       <section class="card">
-        <h2>過去実績の平均による予想</h2>
-        <p class="hint">「データ数」は、この条件に一致した過去の日のうち、その台のデータが登録されている回数です。回数が少ないうちは参考程度に。</p>
+        <h2>過去実績 + 店のクセによる予想</h2>
+        <p class="hint">「総合スコア」は、過去の同条件日の平均期待設定値に、以下2つのサインがあれば加点したものです(高いほど狙い目)。<br>
+        ・<strong>前日据え置きサイン</strong>: 前日が高設定らしいのに出玉が伸びなかった(不発)台は、据え置かれやすいという経験則<br>
+        ・<strong>テコ入れ期待</strong>: 直近1週間の稼働や出玉が、その台自身のいつもの実績よりはっきり低い台は、設定を入れてもらいやすいという経験則<br>
+        どちらも前日・直近1週間のデータが登録されていないと判定できません。「データ数」は同条件日のうちデータがある回数で、少ないうちは参考程度に。</p>
         <div id="tomorrow-prediction-wrap"></div>
       </section>
       <section class="card">
@@ -554,58 +557,112 @@ const App = {
     this.renderTomorrowDetails();
   },
 
-  // 過去の一致日のデータを台ごとに積み上げて、平均期待設定値などを計算する。
+  // 前日に「高設定らしいのに出玉が伸びなかった(不発)」形跡があれば、
+  // 据え置かれやすい、という経験則の判定。前日のデータが無ければnull(判定不可)。
+  computeHoldoverSign(machine, model, allRecords, targetDate) {
+    if (!model) return null;
+    const prevDate = Events.previousDate(targetDate);
+    const prevRecord = allRecords.find((r) => r.machineId === machine.id && r.date === prevDate);
+    if (!prevRecord || prevRecord.diff == null) return null;
+    const weights = Analysis.loadWeights();
+    const probs = Analysis.estimateSettingLikelihoods(prevRecord, model.specs, weights);
+    const highProb = Analysis.highSettingProb(probs);
+    if (highProb == null) return null;
+    const sign = highProb >= 0.4 && prevRecord.diff <= 0;
+    return { sign, prevDate, highProb, diff: prevRecord.diff };
+  },
+
+  // 直近1週間の稼働(総回転)や出玉が、その台自身の過去平均よりはっきり低ければ、
+  // テコ入れで設定が良くなりやすい、という経験則の判定。比較できるデータが無ければnull。
+  computeNeglectSign(machine, allRecords, targetDate) {
+    const weekStart = Events.addDays(targetDate, -7);
+    const machineRecords = allRecords.filter((r) => r.machineId === machine.id);
+    const recentRecords = machineRecords.filter((r) => r.date >= weekStart && r.date < targetDate);
+    const historicalRecords = machineRecords.filter((r) => r.date < weekStart);
+    if (!recentRecords.length || !historicalRecords.length) return null;
+
+    const avg = (arr, field) => arr.reduce((s, r) => s + (Number(r[field]) || 0), 0) / arr.length;
+    const recentAvgSpins = avg(recentRecords, "totalSpins");
+    const historicalAvgSpins = avg(historicalRecords, "totalSpins");
+    const recentAvgDiff = avg(recentRecords, "diff");
+    const historicalAvgDiff = avg(historicalRecords, "diff");
+
+    const lowActivity = historicalAvgSpins > 0 && recentAvgSpins <= historicalAvgSpins * 0.85;
+    const lowPayout = recentAvgDiff < historicalAvgDiff;
+    return { sign: lowActivity || lowPayout, lowActivity, lowPayout, recentAvgSpins, historicalAvgSpins, recentAvgDiff, historicalAvgDiff };
+  },
+
+  // 過去の一致日のデータを台ごとに積み上げて平均期待設定値を出し、
+  // 「前日据え置きサイン」「テコ入れサイン」も加味した総合スコアで並べる。
   aggregatePatternForRule(rule, allRecords, availableDates, targetDate) {
     const pastDates = Events.pastMatchingDates(rule, availableDates, targetDate);
     const byMachine = new Map();
+    this.machines.forEach((m) => {
+      const model = this.models.find((mo) => mo.id === m.modelId);
+      byMachine.set(m.id, { machine: m, model, entries: [] });
+    });
 
+    const weights = Analysis.loadWeights();
     pastDates.forEach((d) => {
       allRecords
         .filter((r) => r.date === d)
         .forEach((r) => {
-          const machine = this.machines.find((m) => m.id === r.machineId);
-          if (!machine) return;
-          const model = this.models.find((mo) => mo.id === machine.modelId);
-          const weights = Analysis.loadWeights();
-          const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
+          const entry = byMachine.get(r.machineId);
+          if (!entry) return;
+          const probs = entry.model ? Analysis.estimateSettingLikelihoods(r, entry.model.specs, weights) : null;
           const expected = Analysis.expectedSetting(probs);
           const highProb = Analysis.highSettingProb(probs);
-          if (!byMachine.has(machine.id)) byMachine.set(machine.id, { machine, model, entries: [] });
-          byMachine.get(machine.id).entries.push({ date: d, expected, highProb });
+          entry.entries.push({ date: d, expected, highProb });
         });
     });
 
-    const rows = Array.from(byMachine.values()).map(({ machine, model, entries }) => {
-      const validExpected = entries.map((e) => e.expected).filter((v) => v != null);
-      const validHigh = entries.map((e) => e.highProb).filter((v) => v != null);
-      const avgExpected = validExpected.length ? validExpected.reduce((a, b) => a + b, 0) / validExpected.length : null;
-      const avgHighProb = validHigh.length ? validHigh.reduce((a, b) => a + b, 0) / validHigh.length : null;
-      const hitCount = validExpected.filter((v) => v >= 5).length;
-      return { machine, model, occurrences: entries.length, avgExpected, avgHighProb, hitCount };
-    });
-    rows.sort((a, b) => (b.avgExpected ?? -1) - (a.avgExpected ?? -1));
+    const rows = Array.from(byMachine.values())
+      .map(({ machine, model, entries }) => {
+        const validExpected = entries.map((e) => e.expected).filter((v) => v != null);
+        const validHigh = entries.map((e) => e.highProb).filter((v) => v != null);
+        const avgExpected = validExpected.length ? validExpected.reduce((a, b) => a + b, 0) / validExpected.length : null;
+        const avgHighProb = validHigh.length ? validHigh.reduce((a, b) => a + b, 0) / validHigh.length : null;
+        const hitCount = validExpected.filter((v) => v >= 5).length;
+
+        const holdover = this.computeHoldoverSign(machine, model, allRecords, targetDate);
+        const neglect = this.computeNeglectSign(machine, allRecords, targetDate);
+        let bonus = 0;
+        if (holdover && holdover.sign) bonus += 0.5;
+        if (neglect && neglect.sign) bonus += 0.5;
+        const finalScore = avgExpected != null || bonus > 0 ? (avgExpected ?? 0) + bonus : null;
+
+        return { machine, model, occurrences: entries.length, avgExpected, avgHighProb, hitCount, holdover, neglect, bonus, finalScore };
+      })
+      .filter((row) => row.occurrences > 0 || row.holdover || row.neglect);
+
+    rows.sort((a, b) => (b.finalScore ?? -1) - (a.finalScore ?? -1));
     return { rows, pastDates };
   },
 
   patternTableHtml(rows) {
     if (!rows.length) return '<p class="hint">過去のデータがまだありません。</p>';
     const body = rows
-      .map(
-        ({ machine, model, occurrences, avgExpected, avgHighProb, hitCount }) => `
+      .map(({ machine, model, occurrences, avgExpected, avgHighProb, hitCount, holdover, neglect, finalScore }) => {
+        const signs = [];
+        if (holdover && holdover.sign) signs.push('<span class="badge badge-warn">前日据え置きサイン</span>');
+        if (neglect && neglect.sign) signs.push('<span class="badge badge-warn">テコ入れ期待</span>');
+        return `
       <tr>
         <td>${machine.number}</td>
         <td>${model ? esc(model.name) : "-"}</td>
+        <td><strong>${finalScore != null ? finalScore.toFixed(2) : "-"}</strong></td>
+        <td>${avgExpected != null ? avgExpected.toFixed(2) : "-"}</td>
+        <td>${signs.join(" ") || "-"}</td>
         <td>${occurrences}回</td>
-        <td><strong>${avgExpected != null ? avgExpected.toFixed(2) : "-"}</strong></td>
         <td>${avgHighProb != null ? Math.round(avgHighProb * 100) + "%" : "-"}</td>
         <td>${hitCount}/${occurrences}</td>
-      </tr>`
-      )
+      </tr>`;
+      })
       .join("");
     return `
       <div class="table-scroll">
         <table>
-          <thead><tr><th>台番</th><th>機種</th><th>データ数</th><th>平均期待設定値</th><th>平均高設定らしさ</th><th>高設定だった回数</th></tr></thead>
+          <thead><tr><th>台番</th><th>機種</th><th>総合スコア</th><th>平均期待設定値</th><th>サイン</th><th>データ数</th><th>平均高設定らしさ</th><th>高設定だった回数</th></tr></thead>
           <tbody>${body}</tbody>
         </table>
       </div>`;

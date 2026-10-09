@@ -61,6 +61,13 @@ const Events = {
     return toDateStr(d);
   },
 
+  // dateStrのn日後(nが負の場合はn日前)の日付(YYYY-MM-DD)を返す
+  addDays(dateStr, n) {
+    const d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() + n);
+    return toDateStr(d);
+  },
+
   // ruleに一致する過去の日付を、実際にデータがある日付一覧の中から探す(今日より前、新しい順)
   pastMatchingDates(rule, availableDates, beforeDateStr) {
     return availableDates
