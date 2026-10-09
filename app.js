@@ -5,7 +5,7 @@ const App = {
   state: {
     tab: "tomorrow",
     currentStoreId: null,
-    pending: { files: [], results: [], date: todayStr() }, // データ入力画面の作業中データ
+    pending: { files: [], results: [], date: todayStr(), batchModelId: "" }, // データ入力画面の作業中データ
   },
   stores: [],
   models: [],
@@ -763,7 +763,17 @@ const App = {
         <h2>データ入力 - ${esc(store.name)}</h2>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="input-date" value="${this.state.pending.date}" /></div>
+          <div class="field">
+            <label>機種(このまとまりは全部同じ機種)</label>
+            <select id="batch-model-select" style="width:180px">
+              <option value="">(選択してください)</option>
+              ${this.models
+                .map((m) => `<option value="${m.id}" ${m.id === this.state.pending.batchModelId ? "selected" : ""}>${esc(m.name)}</option>`)
+                .join("")}
+            </select>
+          </div>
         </div>
+        <p class="hint">先に機種を選んでおくと、読み取り結果すべてにその機種が自動で設定されます(あとから行ごとに直すこともできます)。</p>
         <div class="dropzone" id="dropzone">
           スクリーンショットをここにドラッグ&ドロップ、またはクリックして選択(複数可)
         </div>
@@ -794,6 +804,14 @@ const App = {
     document.getElementById("input-date").addEventListener("change", (e) => {
       this.state.pending.date = e.target.value;
     });
+    document.getElementById("batch-model-select").addEventListener("change", (e) => {
+      this.state.pending.batchModelId = e.target.value;
+      // 今あるすべての行に、選んだ機種をまとめて反映する
+      this.state.pending.results.forEach((r) => {
+        r._chosenModelId = this.state.pending.batchModelId || null;
+      });
+      this.renderReviewTable();
+    });
 
     const dropzone = document.getElementById("dropzone");
     const fileInput = document.getElementById("file-input");
@@ -817,7 +835,14 @@ const App = {
 
     document.getElementById("extract-btn").addEventListener("click", () => this.runExtraction());
     document.getElementById("add-row-btn").addEventListener("click", () => {
-      this.state.pending.results.push({ number: "", totalSpins: null, big: null, reg: null, diff: null });
+      this.state.pending.results.push({
+        number: "",
+        totalSpins: null,
+        big: null,
+        reg: null,
+        diff: null,
+        _chosenModelId: this.state.pending.batchModelId || null,
+      });
       this.renderReviewTable();
     });
     const saveBtn = document.getElementById("save-records-btn");
@@ -865,7 +890,10 @@ const App = {
       rowEl.textContent = `${files[i].name}: 読み取り中...`;
       try {
         const records = await ClaudeApi.extractFromImage(files[i]);
-        records.forEach((r) => this.state.pending.results.push(r));
+        records.forEach((r) => {
+          if (this.state.pending.batchModelId) r._chosenModelId = this.state.pending.batchModelId;
+          this.state.pending.results.push(r);
+        });
         rowEl.textContent = `${files[i].name}: ${records.length}件を読み取りました`;
       } catch (err) {
         rowEl.textContent = `${files[i].name}: 失敗 (${err.message})`;
