@@ -764,7 +764,6 @@ const App = {
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="input-date" value="${this.state.pending.date}" /></div>
           <button type="button" class="btn btn-ghost btn-sm" id="date-today-btn">今日</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="date-yesterday-btn">昨日</button>
         </div>
         <div class="dropzone" id="dropzone">
           スクリーンショットをここにドラッグ&ドロップ、またはクリックして選択(複数可)
@@ -780,7 +779,7 @@ const App = {
 
       <section class="card" id="review-section" ${this.state.pending.results.length ? "" : "hidden"}>
         <h2>確認・修正</h2>
-        <p class="hint">台番は店舗の登録と自動で照合します。「未登録」の台は機種を選ぶと新しく登録されます。</p>
+        <p class="hint">台番は店舗の登録と自動で照合します。機種は一覧で選び直せます(台番登録の内容もあわせて更新されます)。</p>
         <div class="table-scroll">
           <table id="review-table">
             <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th></th></tr></thead>
@@ -798,10 +797,6 @@ const App = {
     });
     document.getElementById("date-today-btn").addEventListener("click", () => {
       this.state.pending.date = todayStr();
-      document.getElementById("input-date").value = this.state.pending.date;
-    });
-    document.getElementById("date-yesterday-btn").addEventListener("click", () => {
-      this.state.pending.date = Events.previousDate(todayStr());
       document.getElementById("input-date").value = this.state.pending.date;
     });
 
@@ -899,13 +894,13 @@ const App = {
     tbody.innerHTML = this.state.pending.results
       .map((r, i) => {
         const matched = machineByNumber.get(Number(r.number));
-        const model = matched ? this.models.find((m) => m.id === matched.modelId) : null;
-        const modelCell = matched
-          ? esc(model ? model.name : "機種未設定")
-          : `<select class="cell-input unmatched-model-select" data-i="${i}" style="width:140px">
-               <option value="">スキップ</option>
-               ${this.models.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}
-             </select>`;
+        const currentModelId = r._chosenModelId !== undefined ? r._chosenModelId : matched ? matched.modelId : "";
+        const modelCell = `<select class="cell-input model-select" data-i="${i}" style="width:150px">
+             <option value="">(選択してください)</option>
+             ${this.models
+               .map((m) => `<option value="${m.id}" ${m.id === currentModelId ? "selected" : ""}>${esc(m.name)}</option>`)
+               .join("")}
+           </select>`;
         return `
         <tr data-i="${i}" class="${matched ? "" : "row-unmatched"}">
           <td><input class="cell-input" data-field="number" type="number" value="${r.number ?? ""}" /></td>
@@ -928,7 +923,7 @@ const App = {
         if (field === "number") this.renderReviewTable();
       });
     });
-    tbody.querySelectorAll(".unmatched-model-select").forEach((sel) => {
+    tbody.querySelectorAll(".model-select").forEach((sel) => {
       sel.addEventListener("change", (e) => {
         const i = Number(e.target.dataset.i);
         this.state.pending.results[i]._chosenModelId = e.target.value || null;
@@ -961,15 +956,19 @@ const App = {
         continue;
       }
       let machine = machineByNumber.get(number);
+      const chosenModelId = r._chosenModelId !== undefined ? r._chosenModelId : machine ? machine.modelId : null;
+      if (!chosenModelId) {
+        skipped++;
+        continue;
+      }
       if (!machine) {
-        if (!r._chosenModelId) {
-          skipped++;
-          continue;
-        }
-        machine = { id: DB.genId(), storeId: store.id, number, modelId: r._chosenModelId };
+        machine = { id: DB.genId(), storeId: store.id, number, modelId: chosenModelId };
         await DB.add(DB.STORES.machines, machine);
         this.machines.push(machine);
         machineByNumber.set(number, machine);
+      } else if (machine.modelId !== chosenModelId) {
+        machine.modelId = chosenModelId;
+        await DB.put(DB.STORES.machines, machine);
       }
 
       const existingRecords = await DB.getAllByIndex(DB.STORES.records, "machineId", machine.id);
