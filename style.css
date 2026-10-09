@@ -261,6 +261,15 @@ th {
   color: var(--warn-text);
 }
 
+.ai-summary {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin: 10px 0 16px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: var(--radius);
