@@ -763,7 +763,6 @@ const App = {
         <h2>データ入力 - ${esc(store.name)}</h2>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="input-date" value="${this.state.pending.date}" /></div>
-          <button type="button" class="btn btn-ghost btn-sm" id="date-today-btn">今日</button>
         </div>
         <div class="dropzone" id="dropzone">
           スクリーンショットをここにドラッグ&ドロップ、またはクリックして選択(複数可)
@@ -794,10 +793,6 @@ const App = {
 
     document.getElementById("input-date").addEventListener("change", (e) => {
       this.state.pending.date = e.target.value;
-    });
-    document.getElementById("date-today-btn").addEventListener("click", () => {
-      this.state.pending.date = todayStr();
-      document.getElementById("input-date").value = this.state.pending.date;
     });
 
     const dropzone = document.getElementById("dropzone");
