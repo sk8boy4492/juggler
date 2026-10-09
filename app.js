@@ -127,10 +127,6 @@ const App = {
             <label>店舗名</label>
             <input type="text" name="name" required placeholder="例: ○○会館 △△店" />
           </div>
-          <div class="field">
-            <label>1島あたりの台数</label>
-            <input type="number" name="islandSize" min="1" value="20" style="width:90px" />
-          </div>
           <button type="submit" class="btn">追加する</button>
         </form>
       </section>
@@ -140,9 +136,8 @@ const App = {
       e.preventDefault();
       const form = e.target;
       const name = form.elements.name.value.trim();
-      const islandSize = Number(form.elements.islandSize.value) || 20;
       if (!name) return;
-      const store = { id: DB.genId(), name, islandSize };
+      const store = { id: DB.genId(), name };
       await DB.add(DB.STORES.stores, store);
       this.stores.push(store);
       if (!this.state.currentStoreId) {
@@ -151,7 +146,6 @@ const App = {
         await this.loadStoreScopedData();
       }
       form.reset();
-      form.elements.islandSize.value = 20;
       this.render();
       this.toast("店舗を追加しました");
     });
@@ -169,7 +163,6 @@ const App = {
       <div class="list-row" data-id="${s.id}">
         <div>
           <strong>${esc(s.name)}</strong>
-          <span class="badge">1島 ${s.islandSize}台</span>
         </div>
         <div class="list-row-actions">
           <button type="button" class="btn btn-ghost btn-sm edit-store">編集</button>
@@ -198,10 +191,7 @@ const App = {
     if (!store) return;
     const name = prompt("店舗名を編集", store.name);
     if (name == null) return;
-    const islandSizeStr = prompt("1島あたりの台数", String(store.islandSize));
-    if (islandSizeStr == null) return;
     store.name = name.trim() || store.name;
-    store.islandSize = Number(islandSizeStr) || store.islandSize;
     DB.put(DB.STORES.stores, store).then(() => {
       this.render();
       this.toast("更新しました");
@@ -677,7 +667,7 @@ const App = {
     root.innerHTML = `
       <section class="card">
         <h2>台番登録 - ${esc(store.name)}</h2>
-        <p class="hint">同じ機種が並んでいる範囲をまとめて登録できます。島番号は台番の並び順から自動で計算されます(1島 ${store.islandSize}台)。</p>
+        <p class="hint">同じ機種が並んでいる範囲をまとめて登録できます。</p>
         <form id="bulk-add-form" class="form-row">
           <div class="field"><label>開始台番</label><input type="number" name="from" required style="width:100px" /></div>
           <div class="field"><label>終了台番</label><input type="number" name="to" required style="width:100px" /></div>
@@ -730,33 +720,22 @@ const App = {
 
   renderMachineList() {
     const container = document.getElementById("machine-list");
-    const store = this.currentStore();
     if (!this.machines.length) {
       container.innerHTML = '<p class="hint">まだ台番が登録されていません。</p>';
       return;
     }
     const sorted = this.machines.slice().sort((a, b) => a.number - b.number);
-    const islandSize = store.islandSize || 20;
-    const islands = new Map();
-    sorted.forEach((m, i) => {
-      const islandNo = Math.floor(i / islandSize) + 1;
-      if (!islands.has(islandNo)) islands.set(islandNo, []);
-      islands.get(islandNo).push(m);
-    });
 
-    let html = "";
-    islands.forEach((list, islandNo) => {
-      html += `<h3>島${islandNo}</h3><div class="table-scroll"><table><thead><tr><th>台番</th><th>機種</th><th></th></tr></thead><tbody>`;
-      list.forEach((m) => {
-        const model = this.models.find((mo) => mo.id === m.modelId);
-        html += `<tr data-id="${m.id}">
-          <td>${m.number}</td>
-          <td>${model ? esc(model.name) : '<span class="badge badge-warn">機種未設定</span>'}</td>
-          <td><button type="button" class="btn btn-danger btn-sm delete-machine">削除</button></td>
-        </tr>`;
-      });
-      html += `</tbody></table></div>`;
+    let html = '<div class="table-scroll"><table><thead><tr><th>台番</th><th>機種</th><th></th></tr></thead><tbody>';
+    sorted.forEach((m) => {
+      const model = this.models.find((mo) => mo.id === m.modelId);
+      html += `<tr data-id="${m.id}">
+        <td>${m.number}</td>
+        <td>${model ? esc(model.name) : '<span class="badge badge-warn">機種未設定</span>'}</td>
+        <td><button type="button" class="btn btn-danger btn-sm delete-machine">削除</button></td>
+      </tr>`;
     });
+    html += "</tbody></table></div>";
     container.innerHTML = html;
 
     container.querySelectorAll(".delete-machine").forEach((btn) =>
