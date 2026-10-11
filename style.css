@@ -322,6 +322,11 @@ th {
   background: var(--warn-bg);
 }
 
+input.cell-warn {
+  border: 2px solid var(--bad);
+  background: #fdecea;
+}
+
 input.cell-input {
   width: 72px;
   text-align: right;

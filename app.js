@@ -687,12 +687,18 @@ const App = {
     matched.forEach((rule) => {
       Events.pastMatchingDates(rule, availableDates, targetDate).forEach((d) => pastDatesSet.add(d));
     });
-    const pastDates = Array.from(pastDatesSet).sort();
+    const sortedPastDates = Array.from(pastDatesSet).sort();
 
-    if (!pastDates.length) {
+    if (!sortedPastDates.length) {
       resultWrap.innerHTML = '<p class="hint">過去のデータがまだないため、分析できません。</p>';
       return;
     }
+
+    // データが長期間蓄積してもAPIコスト・応答時間が際限なく増えないよう、直近の分だけを分析対象にする。
+    // 新しいクセほど現在の傾向に近いはずなので、古いデータを削るのは精度の面でも合理的。
+    const MAX_PAST_DATES = 20;
+    const pastDates = sortedPastDates.slice(-MAX_PAST_DATES);
+    const omittedCount = sortedPastDates.length - pastDates.length;
 
     const history = pastDates.map((d) => {
       const entries = allRecords
@@ -729,6 +735,9 @@ const App = {
     try {
       const result = await ClaudeApi.analyzeTrend({ ruleDescription, targetDate, registeredMachines, history });
       resultWrap.innerHTML = `
+        <p class="hint">直近${pastDates.length}回分のデータで分析しました${
+        omittedCount ? `(古い${omittedCount}回分は対象外)` : ""
+      }。</p>
         <div class="ai-summary">${esc(result.summary).replace(/\n/g, "<br>")}</div>
         <h3>AIのおすすめ台</h3>
         <div class="table-scroll">
@@ -878,7 +887,7 @@ const App = {
 
       <section class="card" id="review-section" ${this.state.pending.results.length ? "" : "hidden"}>
         <h2>確認・修正</h2>
-        <p class="hint">台番は店舗の登録と自動で照合します。機種は一覧で選び直せます(台番登録の内容もあわせて更新されます)。</p>
+        <p class="hint">台番は店舗の登録と自動で照合します。機種は一覧で選び直せます(台番登録の内容もあわせて更新されます)。<span style="color:var(--bad)">赤枠</span>は台番の重複や数値の矛盾など、読み取りミスが疑われる箇所です(マウスを乗せると詳細が出ます)。</p>
         <div class="table-scroll">
           <table id="review-table">
             <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th></th></tr></thead>
@@ -1003,6 +1012,11 @@ const App = {
     section.hidden = this.state.pending.results.length === 0;
 
     const machineByNumber = new Map(this.machines.map((m) => [m.number, m]));
+    const numberCounts = new Map();
+    this.state.pending.results.forEach((r) => {
+      const n = Number(r.number);
+      if (n) numberCounts.set(n, (numberCounts.get(n) || 0) + 1);
+    });
 
     tbody.innerHTML = this.state.pending.results
       .map((r, i) => {
@@ -1014,13 +1028,28 @@ const App = {
                .map((m) => `<option value="${m.id}" ${m.id === currentModelId ? "selected" : ""}>${esc(m.name)}</option>`)
                .join("")}
            </select>`;
+
+        // 読み取りミスが疑われる値を検知し、確認画面で見落とさないように警告する。
+        const totalSpins = Number(r.totalSpins) || 0;
+        const big = Number(r.big) || 0;
+        const reg = Number(r.reg) || 0;
+        const isDuplicateNumber = Number(r.number) && numberCounts.get(Number(r.number)) > 1;
+        const zeroSpinsWithWins = totalSpins === 0 && (big > 0 || reg > 0);
+        const impossibleWinRate = totalSpins > 0 && (big + reg) / totalSpins > 0.1;
+        const numberWarnTitle = isDuplicateNumber ? "同じ台番が他の行にもあります" : "";
+        const spinsWarnTitle = zeroSpinsWithWins
+          ? "総回転が0なのにBIG/REGがあります"
+          : impossibleWinRate
+          ? "総回転に対してBIG+REGが多すぎます(読み取りミスの可能性)"
+          : "";
+
         return `
         <tr data-i="${i}" class="${matched ? "" : "row-unmatched"}">
-          <td><input class="cell-input" data-field="number" type="number" value="${r.number ?? ""}" /></td>
+          <td><input class="cell-input ${isDuplicateNumber ? "cell-warn" : ""}" data-field="number" type="number" value="${r.number ?? ""}" title="${numberWarnTitle}" /></td>
           <td>${modelCell}</td>
-          <td><input class="cell-input" data-field="totalSpins" type="number" value="${r.totalSpins ?? ""}" /></td>
-          <td><input class="cell-input" data-field="big" type="number" value="${r.big ?? ""}" /></td>
-          <td><input class="cell-input" data-field="reg" type="number" value="${r.reg ?? ""}" /></td>
+          <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="totalSpins" type="number" value="${r.totalSpins ?? ""}" title="${spinsWarnTitle}" /></td>
+          <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="big" type="number" value="${r.big ?? ""}" title="${spinsWarnTitle}" /></td>
+          <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="reg" type="number" value="${r.reg ?? ""}" title="${spinsWarnTitle}" /></td>
           <td><input class="cell-input" data-field="diff" type="number" value="${r.diff ?? ""}" /></td>
           <td><button type="button" class="btn btn-danger btn-sm remove-review-row">✕</button></td>
         </tr>`;
@@ -1095,9 +1124,12 @@ const App = {
       savedCount++;
     }
 
+    const savedDate = date;
     this.state.pending.results = [];
-    this.renderReviewTable();
-    this.toast(`${savedCount}件保存しました${skipped ? `(${skipped}件はスキップ)` : ""}`);
+    this.state.pending.date = todayStr();
+    this.state.pending.batchModelId = "";
+    this.renderInputScreen();
+    this.toast(`${savedDate}のデータとして${savedCount}件保存しました${skipped ? `(${skipped}件はスキップ)` : ""}`);
   },
 
   // ---------- 設定 ----------
