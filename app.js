@@ -321,15 +321,21 @@ const App = {
       return;
     }
     const weights = Analysis.loadWeights();
+    const bigRegSum = weights.big + weights.reg;
+    const regShareOfBigReg = bigRegSum > 0 ? Math.round((weights.reg / bigRegSum) * 100) : 60;
     root.innerHTML = `
       <section class="card">
         <h2>設定推定 - ${esc(store.name)}</h2>
-        <p class="hint">BIG・REG回数と総回転数から、設定1〜6それぞれだった可能性を二項分布で計算します。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。差枚は参考情報です(計算には使っていません)。</p>
+        <p class="hint">BIG・REG回数・総回転数・差枚数から、設定1〜6それぞれだった可能性を計算します(BIG/REGは二項分布、差枚は機械割から見積もった正規分布で評価)。さらに「ホールが高設定を使う割合は多くても10%程度で、大半は1・2などの低設定」という前提を事前分布として組み込んでいるため、少ないデータで偶然BIG/REGが続いただけでは高設定と出にくくなっています。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。</p>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="analysis-date" /></div>
           <div class="field">
-            <label>REG重視度(0〜100、数値が大きいほどREGを重視)</label>
-            <input type="number" id="reg-weight-input" min="0" max="100" value="${Math.round(weights.reg * 100)}" style="width:90px" />
+            <label>差枚重視度(0〜100、数値が大きいほど差枚を重視)</label>
+            <input type="number" id="diff-weight-input" min="0" max="100" value="${Math.round(weights.diff * 100)}" style="width:90px" />
+          </div>
+          <div class="field">
+            <label>REG重視度(BIGとREGの中でのバランス。数値が大きいほどREGを重視)</label>
+            <input type="number" id="reg-weight-input" min="0" max="100" value="${regShareOfBigReg}" style="width:90px" />
           </div>
         </div>
         <div class="table-scroll">
@@ -343,14 +349,27 @@ const App = {
       </section>
     `;
 
-    document.getElementById("reg-weight-input").addEventListener("change", (e) => {
-      let regPct = Number(e.target.value);
+    const applyWeightInputs = () => {
+      let diffPct = Number(document.getElementById("diff-weight-input").value);
+      if (Number.isNaN(diffPct)) diffPct = Math.round(Analysis.DEFAULT_WEIGHTS.diff * 100);
+      diffPct = Math.max(0, Math.min(100, diffPct));
+      document.getElementById("diff-weight-input").value = diffPct;
+
+      let regPct = Number(document.getElementById("reg-weight-input").value);
       if (Number.isNaN(regPct)) regPct = 60;
       regPct = Math.max(0, Math.min(100, regPct));
-      e.target.value = regPct;
-      Analysis.saveWeights({ reg: regPct / 100, big: (100 - regPct) / 100 });
+      document.getElementById("reg-weight-input").value = regPct;
+
+      const remaining = 1 - diffPct / 100;
+      Analysis.saveWeights({
+        diff: diffPct / 100,
+        reg: remaining * (regPct / 100),
+        big: remaining * (1 - regPct / 100),
+      });
       this.renderAnalysisTable();
-    });
+    };
+    document.getElementById("diff-weight-input").addEventListener("change", applyWeightInputs);
+    document.getElementById("reg-weight-input").addEventListener("change", applyWeightInputs);
 
     this.setupAnalysisDateAndRender();
   },
