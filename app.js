@@ -93,6 +93,7 @@ const App = {
 
     if (this.state.tab === "tomorrow") this.renderTomorrowScreen();
     if (this.state.tab === "analysis") this.renderAnalysisScreen();
+    if (this.state.tab === "balance") this.renderBalanceScreen();
     if (this.state.tab === "events") this.renderEventsScreen();
     if (this.state.tab === "stores") this.renderStoresScreen();
     if (this.state.tab === "models") this.renderModelsScreen();
@@ -210,6 +211,8 @@ const App = {
     }
     const rules = await DB.getAllByIndex(DB.STORES.eventRules, "storeId", id);
     for (const r of rules) await DB.delete(DB.STORES.eventRules, r.id);
+    const balances = await DB.getAllByIndex(DB.STORES.sessionResults, "storeId", id);
+    for (const b of balances) await DB.delete(DB.STORES.sessionResults, b.id);
     await DB.delete(DB.STORES.stores, id);
     this.stores = this.stores.filter((s) => s.id !== id);
     if (this.state.currentStoreId === id) {
@@ -438,6 +441,178 @@ const App = {
           <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th>期待設定値</th><th>高設定らしさ</th><th>設定別の内訳(1→6)</th></tr></thead>
           <tbody>${body}</tbody>
         </table>
+      </div>`;
+  },
+
+  // ---------- 収支(自分の実際の勝敗) ----------
+  async renderBalanceScreen() {
+    const root = document.getElementById("screen-balance");
+    const store = this.currentStore();
+    if (!store) {
+      root.innerHTML = '<section class="card"><p class="hint">先に店舗管理タブから店舗を登録してください。</p></section>';
+      return;
+    }
+    root.innerHTML = `
+      <section class="card">
+        <h2>収支記録 - ${esc(store.name)}</h2>
+        <p class="hint">台データとは別に、その日実際に遊技した結果の収支(円でも枚でも、普段使っている単位でかまいません)を日ごとに記録します。同じ日をもう一度保存すると上書きされます。</p>
+        <div class="form-row">
+          <div class="field"><label>日付</label><input type="date" id="balance-date" value="${todayStr()}" /></div>
+          <div class="field"><label>収支</label><input type="number" id="balance-amount-input" style="width:120px" placeholder="例: -5000" /></div>
+          <button type="button" class="btn" id="save-balance-btn">保存</button>
+        </div>
+        <div id="balance-summary"></div>
+        <div id="balance-chart-wrap"></div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>日付</th><th>収支</th><th>累計</th><th></th></tr></thead>
+            <tbody id="balance-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    `;
+
+    document.getElementById("balance-date").addEventListener("change", () => this.loadBalanceAmountForDate());
+    document.getElementById("save-balance-btn").addEventListener("click", () => this.saveBalanceResult());
+
+    await this.loadBalanceAmountForDate();
+    await this.renderBalanceList();
+  },
+
+  // 対象日に既存の記録があれば入力欄に読み込む(上書き保存時に値が見えるようにする)。
+  async loadBalanceAmountForDate() {
+    const store = this.currentStore();
+    const date = document.getElementById("balance-date").value;
+    const input = document.getElementById("balance-amount-input");
+    if (!store || !date || !input) return;
+    const all = await DB.getAllByIndex(DB.STORES.sessionResults, "storeId", store.id);
+    const existing = all.find((r) => r.date === date);
+    input.value = existing ? existing.result : "";
+  },
+
+  async saveBalanceResult() {
+    const store = this.currentStore();
+    const date = document.getElementById("balance-date").value;
+    const raw = document.getElementById("balance-amount-input").value;
+    if (!date) {
+      this.toast("日付を入力してください");
+      return;
+    }
+    if (raw === "") {
+      this.toast("収支を入力してください");
+      return;
+    }
+    const result = Number(raw);
+    if (Number.isNaN(result)) {
+      this.toast("収支は数値で入力してください");
+      return;
+    }
+    const all = await DB.getAllByIndex(DB.STORES.sessionResults, "storeId", store.id);
+    const existing = all.find((r) => r.date === date);
+    const record = existing || { id: DB.genId(), storeId: store.id, date };
+    record.result = result;
+    await DB.put(DB.STORES.sessionResults, record);
+    this.toast(`${date}の収支を保存しました`);
+    await this.renderBalanceList();
+  },
+
+  async renderBalanceList() {
+    const store = this.currentStore();
+    const tbody = document.getElementById("balance-tbody");
+    const summaryEl = document.getElementById("balance-summary");
+    const chartEl = document.getElementById("balance-chart-wrap");
+    if (!store || !tbody) return;
+    const all = await DB.getAllByIndex(DB.STORES.sessionResults, "storeId", store.id);
+    const rows = all.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+    const total = rows.reduce((sum, r) => sum + Number(r.result), 0);
+    const totalClass = total > 0 ? "diff-pos" : total < 0 ? "diff-neg" : "";
+    summaryEl.innerHTML = rows.length
+      ? `<p class="hint">合計収支: <strong class="${totalClass}" style="font-size:16px">${total >= 0 ? "+" : ""}${total.toLocaleString()}</strong>(${rows.length}日分)</p>`
+      : "";
+
+    chartEl.innerHTML = rows.length >= 2 ? this.balanceChartSvg(rows) : rows.length ? '<p class="hint">グラフはデータが2日分以上集まると表示されます。</p>' : "";
+
+    let cumulative = 0;
+    const cumulativeByIndexAsc = [];
+    rows.forEach((r) => {
+      cumulative += Number(r.result);
+      cumulativeByIndexAsc.push(cumulative);
+    });
+    const rowsDesc = rows.slice().reverse();
+    tbody.innerHTML = rows.length
+      ? rowsDesc
+          .map((r, i) => {
+            const ascIndex = rows.length - 1 - i;
+            const cum = cumulativeByIndexAsc[ascIndex];
+            const resultClass = r.result > 0 ? "diff-pos" : r.result < 0 ? "diff-neg" : "";
+            const cumClass = cum > 0 ? "diff-pos" : cum < 0 ? "diff-neg" : "";
+            return `<tr data-id="${r.id}">
+              <td>${esc(r.date)}</td>
+              <td class="${resultClass}">${r.result >= 0 ? "+" : ""}${Number(r.result).toLocaleString()}</td>
+              <td class="${cumClass}">${cum >= 0 ? "+" : ""}${cum.toLocaleString()}</td>
+              <td><button type="button" class="btn btn-danger btn-sm remove-balance-row">✕</button></td>
+            </tr>`;
+          })
+          .join("")
+      : '<tr><td colspan="4" class="hint">まだ記録がありません</td></tr>';
+
+    tbody.querySelectorAll(".remove-balance-row").forEach((btn) =>
+      btn.addEventListener("click", async (e) => {
+        const id = e.target.closest("tr").dataset.id;
+        if (!confirm("この日の収支記録を削除しますか?")) return;
+        await DB.delete(DB.STORES.sessionResults, id);
+        await this.renderBalanceList();
+      })
+    );
+  },
+
+  // 日ごとの累計収支を折れ線グラフ(SVG)で描画する。
+  balanceChartSvg(rows) {
+    const width = 720;
+    const height = 220;
+    const padding = { top: 16, right: 16, bottom: 12, left: 56 };
+    const innerW = width - padding.left - padding.right;
+    const innerH = height - padding.top - padding.bottom;
+
+    let cumulative = 0;
+    const points = rows.map((r) => {
+      cumulative += Number(r.result);
+      return { date: r.date, daily: Number(r.result), cum: cumulative };
+    });
+
+    const values = points.map((p) => p.cum).concat([0]);
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+    const range = maxV - minV || 1;
+
+    const xFor = (i) => padding.left + (points.length > 1 ? (i / (points.length - 1)) * innerW : innerW / 2);
+    const yFor = (v) => padding.top + innerH - ((v - minV) / range) * innerH;
+
+    const zeroY = yFor(0);
+    const linePoints = points.map((p, i) => `${xFor(i)},${yFor(p.cum)}`).join(" ");
+
+    const circles = points
+      .map((p, i) => {
+        const sign = p.daily >= 0 ? "+" : "";
+        const cumSign = p.cum >= 0 ? "+" : "";
+        return `<circle cx="${xFor(i)}" cy="${yFor(p.cum)}" r="3.5" fill="var(--brand)"><title>${esc(p.date)}: 当日${sign}${p.daily.toLocaleString()} / 累計${cumSign}${p.cum.toLocaleString()}</title></circle>`;
+      })
+      .join("");
+
+    const last = points[points.length - 1];
+    const lastSign = last.cum >= 0 ? "+" : "";
+    const lastLabel = `<text x="${xFor(points.length - 1) - 4}" y="${yFor(last.cum) - 8}" font-size="11" text-anchor="end" fill="var(--text-secondary)">${lastSign}${last.cum.toLocaleString()}</text>`;
+
+    return `
+      <div style="overflow-x:auto">
+        <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="累計収支の推移">
+          <line x1="${padding.left}" y1="${zeroY}" x2="${width - padding.right}" y2="${zeroY}" stroke="var(--border)" stroke-dasharray="4 4" />
+          <text x="${padding.left - 8}" y="${zeroY + 4}" font-size="10" text-anchor="end" fill="var(--text-muted)">0</text>
+          <polyline points="${linePoints}" fill="none" stroke="var(--brand)" stroke-width="2" />
+          ${circles}
+          ${lastLabel}
+        </svg>
       </div>`;
   },
 
@@ -1299,6 +1474,7 @@ const App = {
       machines: await DB.getAll(DB.STORES.machines),
       records,
       eventRules: await DB.getAll(DB.STORES.eventRules),
+      sessionResults: await DB.getAll(DB.STORES.sessionResults),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1325,7 +1501,14 @@ const App = {
         }
         if (!confirm("現在のすべてのデータを、このファイルの内容で置き換えます。よろしいですか?")) return;
 
-        for (const name of [DB.STORES.stores, DB.STORES.models, DB.STORES.machines, DB.STORES.records, DB.STORES.eventRules]) {
+        for (const name of [
+          DB.STORES.stores,
+          DB.STORES.models,
+          DB.STORES.machines,
+          DB.STORES.records,
+          DB.STORES.eventRules,
+          DB.STORES.sessionResults,
+        ]) {
           await DB.clearAll(name);
         }
         await DB.bulkPut(DB.STORES.stores, data.stores);
@@ -1333,6 +1516,7 @@ const App = {
         await DB.bulkPut(DB.STORES.machines, data.machines || []);
         await DB.bulkPut(DB.STORES.records, data.records || []);
         await DB.bulkPut(DB.STORES.eventRules, data.eventRules || []);
+        await DB.bulkPut(DB.STORES.sessionResults, data.sessionResults || []);
 
         this.stores = await DB.getAll(DB.STORES.stores);
         this.models = await DB.getAll(DB.STORES.models);
