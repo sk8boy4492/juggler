@@ -39,6 +39,11 @@ const Analysis = {
   // (5+6の合計で5%)
   SETTING_PRIOR: { 1: 0.36, 2: 0.31, 3: 0.18, 4: 0.1, 5: 0.035, 6: 0.015 },
 
+  // 総回転数がこれに満たない台は、BIG/REGがたまたま良く出ただけでも高設定(5・6)と
+  // 誤認しやすいため、信頼できるデータ量に達するまで高設定という判断自体をさせない。
+  MIN_RELIABLE_SPINS: 4000,
+  HIGH_SETTINGS: [5, 6],
+
   loadWeights() {
     try {
       const raw = localStorage.getItem("juggler_estimate_weights");
@@ -72,11 +77,12 @@ const Analysis = {
     const regK = record.reg;
     if (!n || n <= 0 || bigK == null || regK == null) return null;
     weights = this.normalizeWeights(weights);
+    const reliable = n >= this.MIN_RELIABLE_SPINS;
 
     const logScores = {};
     for (let s = 1; s <= 6; s++) {
       const spec = modelSpecs[s];
-      if (!spec || !spec.big || !spec.reg) {
+      if (!spec || !spec.big || !spec.reg || (!reliable && this.HIGH_SETTINGS.includes(s))) {
         logScores[s] = null;
         continue;
       }

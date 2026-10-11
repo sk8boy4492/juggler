@@ -327,7 +327,7 @@ const App = {
     root.innerHTML = `
       <section class="card">
         <h2>設定推定 - ${esc(store.name)}</h2>
-        <p class="hint">BIG・REG回数と総回転数から、設定1〜6それぞれだった可能性を二項分布で計算します。さらに「ホールが高設定(5・6)を使う割合は合計5%程度で、大半は1・2などの低設定」という前提を事前分布として組み込んでいるため、少ないデータで偶然BIG/REGが続いただけでは高設定と出にくくなっています。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。差枚は参考情報です(計算には使っていません)。</p>
+        <p class="hint">BIG・REG回数と総回転数から、設定1〜6それぞれだった可能性を二項分布で計算します。さらに「ホールが高設定(5・6)を使う割合は合計5%程度で、大半は1・2などの低設定」という前提を事前分布として組み込んでいるため、少ないデータで偶然BIG/REGが続いただけでは高設定と出にくくなっています。総回転数が${Analysis.MIN_RELIABLE_SPINS}回転に満たない台は、データ不足として高設定(5・6)とは判断しません(内訳が「-」になります)。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。差枚は参考情報です(計算には使っていません)。</p>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="analysis-date" /></div>
           <div class="field">
@@ -399,10 +399,11 @@ const App = {
       ? [1, 2, 3, 4, 5, 6].map((s) => (probs[s] != null ? Math.round(probs[s] * 100) : "-")).join(" / ")
       : "計算不可";
     const diffClass = r.diff == null ? "" : r.diff >= 0 ? "diff-pos" : "diff-neg";
+    const lowSpins = r.totalSpins != null && r.totalSpins < Analysis.MIN_RELIABLE_SPINS;
     return `<tr>
       <td>${machine ? machine.number : "(削除済み)"}</td>
       <td>${model ? esc(model.name) : "-"}</td>
-      <td>${r.totalSpins ?? "-"}</td>
+      <td>${r.totalSpins ?? "-"}${lowSpins ? ' <span class="hint" style="font-size:10px" title="高設定とは判断しません">(データ不足)</span>' : ""}</td>
       <td>${r.big ?? "-"}</td>
       <td>${r.reg ?? "-"}</td>
       <td class="${diffClass}">${r.diff ?? "-"}</td>
