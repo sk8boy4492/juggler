@@ -324,21 +324,15 @@ const App = {
       return;
     }
     const weights = Analysis.loadWeights();
-    const bigRegSum = weights.big + weights.reg;
-    const regShareOfBigReg = bigRegSum > 0 ? Math.round((weights.reg / bigRegSum) * 100) : 60;
     root.innerHTML = `
       <section class="card">
         <h2>設定推定 - ${esc(store.name)}</h2>
-        <p class="hint">BIG・REG回数・総回転数・差枚数から、設定1〜6それぞれだった可能性を計算します(BIG/REGは二項分布、差枚は機械割から見積もった正規分布で評価)。さらに「ホールが高設定(5・6)を使う割合は合計5%程度で、大半は1・2などの低設定」という前提を事前分布として組み込んでいるため、少ないデータで偶然BIG/REGが続いただけでは高設定と出にくくなっています。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。</p>
+        <p class="hint">BIG・REG回数と総回転数から、設定1〜6それぞれだった可能性を二項分布で計算します。さらに「ホールが高設定(5・6)を使う割合は合計5%程度で、大半は1・2などの低設定」という前提を事前分布として組み込んでいるため、少ないデータで偶然BIG/REGが続いただけでは高設定と出にくくなっています。「高設定らしさ」は設定5・6の確率の合計です。期待設定値が高い順に並びます。差枚は参考情報です(計算には使っていません)。</p>
         <div class="form-row">
           <div class="field"><label>対象日</label><input type="date" id="analysis-date" /></div>
           <div class="field">
-            <label>差枚重視度(0〜100、数値が大きいほど差枚を重視)</label>
-            <input type="number" id="diff-weight-input" min="0" max="100" value="${Math.round(weights.diff * 100)}" style="width:90px" />
-          </div>
-          <div class="field">
-            <label>REG重視度(BIGとREGの中でのバランス。数値が大きいほどREGを重視)</label>
-            <input type="number" id="reg-weight-input" min="0" max="100" value="${regShareOfBigReg}" style="width:90px" />
+            <label>REG重視度(0〜100、数値が大きいほどREGを重視)</label>
+            <input type="number" id="reg-weight-input" min="0" max="100" value="${Math.round(weights.reg * 100)}" style="width:90px" />
           </div>
         </div>
         <div class="table-scroll">
@@ -352,27 +346,14 @@ const App = {
       </section>
     `;
 
-    const applyWeightInputs = () => {
-      let diffPct = Number(document.getElementById("diff-weight-input").value);
-      if (Number.isNaN(diffPct)) diffPct = Math.round(Analysis.DEFAULT_WEIGHTS.diff * 100);
-      diffPct = Math.max(0, Math.min(100, diffPct));
-      document.getElementById("diff-weight-input").value = diffPct;
-
-      let regPct = Number(document.getElementById("reg-weight-input").value);
+    document.getElementById("reg-weight-input").addEventListener("change", (e) => {
+      let regPct = Number(e.target.value);
       if (Number.isNaN(regPct)) regPct = 60;
       regPct = Math.max(0, Math.min(100, regPct));
-      document.getElementById("reg-weight-input").value = regPct;
-
-      const remaining = 1 - diffPct / 100;
-      Analysis.saveWeights({
-        diff: diffPct / 100,
-        reg: remaining * (regPct / 100),
-        big: remaining * (1 - regPct / 100),
-      });
+      e.target.value = regPct;
+      Analysis.saveWeights({ reg: regPct / 100, big: (100 - regPct) / 100 });
       this.renderAnalysisTable();
-    };
-    document.getElementById("diff-weight-input").addEventListener("change", applyWeightInputs);
-    document.getElementById("reg-weight-input").addEventListener("change", applyWeightInputs);
+    });
 
     this.setupAnalysisDateAndRender();
   },
@@ -1099,7 +1080,7 @@ const App = {
         <p class="hint">台番は店舗の登録と自動で照合します。機種は一覧で選び直せます(台番登録の内容もあわせて更新されます)。<span style="color:var(--bad)">赤枠</span>は台番の重複や数値の矛盾など、読み取りミスが疑われる箇所です(マウスを乗せると詳細が出ます)。</p>
         <div class="table-scroll">
           <table id="review-table">
-            <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th>差枚</th><th></th></tr></thead>
+            <thead><tr><th>台番</th><th>機種</th><th>総回転</th><th>BIG</th><th>REG</th><th></th></tr></thead>
             <tbody id="review-tbody"></tbody>
           </table>
         </div>
@@ -1151,7 +1132,6 @@ const App = {
         totalSpins: null,
         big: null,
         reg: null,
-        diff: null,
         _chosenModelId: this.state.pending.batchModelId || null,
       });
       this.renderReviewTable();
@@ -1268,7 +1248,6 @@ const App = {
           <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="totalSpins" type="number" value="${r.totalSpins ?? ""}" title="${spinsWarnTitle}" /></td>
           <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="big" type="number" value="${r.big ?? ""}" title="${spinsWarnTitle}" /></td>
           <td><input class="cell-input ${spinsWarnTitle ? "cell-warn" : ""}" data-field="reg" type="number" value="${r.reg ?? ""}" title="${spinsWarnTitle}" /></td>
-          <td><input class="cell-input" data-field="diff" type="number" value="${r.diff ?? ""}" /></td>
           <td><button type="button" class="btn btn-danger btn-sm remove-review-row">✕</button></td>
         </tr>`;
       })
@@ -1337,7 +1316,6 @@ const App = {
       record.totalSpins = r.totalSpins;
       record.big = r.big;
       record.reg = r.reg;
-      record.diff = r.diff;
       await DB.put(DB.STORES.records, record);
       savedCount++;
     }
@@ -1389,7 +1367,6 @@ const App = {
         totalSpins: rec.totalSpins,
         big: rec.big,
         reg: rec.reg,
-        diff: rec.diff,
         _chosenModelId: machine.modelId,
       });
       loaded++;

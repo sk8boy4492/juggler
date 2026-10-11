@@ -89,7 +89,7 @@ const ClaudeApi = {
     return toolUse.input;
   },
 
-  // 1枚の画像から台データを抽出する。戻り値: [{number, totalSpins, big, reg, diff}, ...]
+  // 1枚の画像から台データを抽出する。戻り値: [{number, totalSpins, big, reg}, ...]
   async extractFromImage(file) {
     const base64 = await this.fileToBase64(file);
     const mediaType = file.type || "image/png";
@@ -110,7 +110,6 @@ const ClaudeApi = {
                 totalSpins: { type: ["integer", "null"], description: "総回転数(読み取れなければnull)" },
                 big: { type: ["integer", "null"], description: "BIG回数(読み取れなければnull)" },
                 reg: { type: ["integer", "null"], description: "REG回数(読み取れなければnull)" },
-                diff: { type: ["integer", "null"], description: "差枚数。マイナスの場合は負の数(読み取れなければnull)" },
               },
               required: ["number"],
             },
@@ -125,7 +124,7 @@ const ClaudeApi = {
       {
         type: "text",
         text:
-          "この画像はパチスロ店のデータサイトのスクリーンショットです。表に写っている台ごとに、台番号・総回転数・BIG回数・REG回数・差枚数を読み取って record_machine_data ツールで記録してください。1台分しか写っていない場合はrecordsを1件にしてください。はっきり読み取れない項目はnullにしてください。",
+          "この画像はパチスロ店のデータサイトのスクリーンショットです。表に写っている台ごとに、台番号・総回転数・BIG回数・REG回数を読み取って record_machine_data ツールで記録してください。1台分しか写っていない場合はrecordsを1件にしてください。はっきり読み取れない項目はnullにしてください。",
       },
     ];
 
