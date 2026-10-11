@@ -676,63 +676,71 @@ const App = {
       return;
     }
 
+    // 連打で何度もAPI料金が発生しないよう、実行中はボタンを無効化する。
+    const analyzeBtn = document.getElementById("ai-analyze-btn");
+    if (analyzeBtn) {
+      if (analyzeBtn.disabled) return;
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = "分析中…";
+    }
+
     const resultWrap = document.getElementById("ai-analysis-wrap");
     resultWrap.innerHTML = '<p class="hint">分析中です…</p>';
 
-    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
-    const availableDates = Array.from(new Set(allRecords.map((r) => r.date)));
-    const weights = Analysis.loadWeights();
+    try {
+      const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
+      const availableDates = Array.from(new Set(allRecords.map((r) => r.date)));
+      const weights = Analysis.loadWeights();
 
-    const pastDatesSet = new Set();
-    matched.forEach((rule) => {
-      Events.pastMatchingDates(rule, availableDates, targetDate).forEach((d) => pastDatesSet.add(d));
-    });
-    const sortedPastDates = Array.from(pastDatesSet).sort();
+      const pastDatesSet = new Set();
+      matched.forEach((rule) => {
+        Events.pastMatchingDates(rule, availableDates, targetDate).forEach((d) => pastDatesSet.add(d));
+      });
+      const sortedPastDates = Array.from(pastDatesSet).sort();
 
-    if (!sortedPastDates.length) {
-      resultWrap.innerHTML = '<p class="hint">過去のデータがまだないため、分析できません。</p>';
-      return;
-    }
+      if (!sortedPastDates.length) {
+        resultWrap.innerHTML = '<p class="hint">過去のデータがまだないため、分析できません。</p>';
+        return;
+      }
 
-    // データが長期間蓄積してもAPIコスト・応答時間が際限なく増えないよう、直近の分だけを分析対象にする。
-    // 新しいクセほど現在の傾向に近いはずなので、古いデータを削るのは精度の面でも合理的。
-    const MAX_PAST_DATES = 20;
-    const pastDates = sortedPastDates.slice(-MAX_PAST_DATES);
-    const omittedCount = sortedPastDates.length - pastDates.length;
+      // データが長期間蓄積してもAPIコスト・応答時間が際限なく増えないよう、直近の分だけを分析対象にする。
+      // 新しいクセほど現在の傾向に近いはずなので、古いデータを削るのは精度の面でも合理的。
+      const MAX_PAST_DATES = 20;
+      const pastDates = sortedPastDates.slice(-MAX_PAST_DATES);
+      const omittedCount = sortedPastDates.length - pastDates.length;
 
-    const history = pastDates.map((d) => {
-      const entries = allRecords
-        .filter((r) => r.date === d)
-        .map((r) => {
-          const machine = this.machines.find((m) => m.id === r.machineId);
-          const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
-          const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
-          const expected = Analysis.expectedSetting(probs);
-          return {
-            number: machine ? machine.number : null,
-            model: model ? model.name : null,
-            totalSpins: r.totalSpins,
-            big: r.big,
-            reg: r.reg,
-            diff: r.diff,
-            estimatedExpectedSetting: expected != null ? Number(expected.toFixed(2)) : null,
-          };
-        })
-        .filter((e) => e.number != null);
-      return { date: d, entries };
-    });
-
-    const registeredMachines = this.machines
-      .slice()
-      .sort((a, b) => a.number - b.number)
-      .map((m) => {
-        const model = this.models.find((mo) => mo.id === m.modelId);
-        return { number: m.number, model: model ? model.name : null };
+      const history = pastDates.map((d) => {
+        const entries = allRecords
+          .filter((r) => r.date === d)
+          .map((r) => {
+            const machine = this.machines.find((m) => m.id === r.machineId);
+            const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
+            const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
+            const expected = Analysis.expectedSetting(probs);
+            return {
+              number: machine ? machine.number : null,
+              model: model ? model.name : null,
+              totalSpins: r.totalSpins,
+              big: r.big,
+              reg: r.reg,
+              diff: r.diff,
+              estimatedExpectedSetting: expected != null ? Number(expected.toFixed(2)) : null,
+            };
+          })
+          .filter((e) => e.number != null);
+        return { date: d, entries };
       });
 
-    const ruleDescription = matched.map((r) => `${r.name}(${Events.describeRule(r)})`).join("、");
+      const registeredMachines = this.machines
+        .slice()
+        .sort((a, b) => a.number - b.number)
+        .map((m) => {
+          const model = this.models.find((mo) => mo.id === m.modelId);
+          return { number: m.number, model: model ? model.name : null };
+        });
 
-    try {
+      const ruleDescription = matched.map((r) => `${r.name}(${Events.describeRule(r)})`).join("、");
+
       const result = await ClaudeApi.analyzeTrend({ ruleDescription, targetDate, registeredMachines, history });
       resultWrap.innerHTML = `
         <p class="hint">直近${pastDates.length}回分のデータで分析しました${
@@ -752,6 +760,11 @@ const App = {
         </div>`;
     } catch (err) {
       resultWrap.innerHTML = `<p class="hint">分析に失敗しました: ${esc(err.message)}</p>`;
+    } finally {
+      if (analyzeBtn) {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = "AIに分析してもらう";
+      }
     }
   },
 
@@ -984,6 +997,8 @@ const App = {
     const files = this.state.pending.files.slice();
     progressArea.innerHTML = files.map((f, i) => `<div class="progress-row" id="progress-${i}">${esc(f.name)}: 待機中</div>`).join("");
 
+    // 通信エラーやレート制限で失敗した画像は選択し直させず、キューに残して再試行できるようにする。
+    const failedFiles = [];
     for (let i = 0; i < files.length; i++) {
       const rowEl = document.getElementById(`progress-${i}`);
       rowEl.textContent = `${files[i].name}: 読み取り中...`;
@@ -995,12 +1010,16 @@ const App = {
         });
         rowEl.textContent = `${files[i].name}: ${records.length}件を読み取りました`;
       } catch (err) {
-        rowEl.textContent = `${files[i].name}: 失敗 (${err.message})`;
+        rowEl.textContent = `${files[i].name}: 失敗 (${err.message}) → 再試行できます`;
+        failedFiles.push(files[i]);
       }
     }
 
-    this.state.pending.files = [];
+    this.state.pending.files = failedFiles;
     this.renderFileChips();
+    if (failedFiles.length) {
+      this.toast(`${failedFiles.length}件の読み取りに失敗しました。もう一度「画像を読み取る」を押してください`);
+    }
     document.getElementById("review-section").hidden = this.state.pending.results.length === 0;
     this.renderReviewTable();
   },
