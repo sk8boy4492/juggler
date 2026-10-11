@@ -884,7 +884,9 @@ const App = {
                 .join("")}
             </select>
           </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="load-existing-btn" hidden>この日の保存済みデータを編集用に読み込む</button>
         </div>
+        <p class="hint" id="existing-data-hint"></p>
         <p class="hint">先に機種を選んでおくと、読み取り結果すべてにその機種が自動で設定されます(あとから行ごとに直すこともできます)。</p>
         <div class="dropzone" id="dropzone">
           スクリーンショットをここにドラッグ&ドロップ、またはクリックして選択(複数可)
@@ -915,7 +917,10 @@ const App = {
 
     document.getElementById("input-date").addEventListener("change", (e) => {
       this.state.pending.date = e.target.value;
+      this.refreshExistingDataHint();
     });
+    document.getElementById("load-existing-btn").addEventListener("click", () => this.loadExistingRecordsForEdit());
+    this.refreshExistingDataHint();
     document.getElementById("batch-model-select").addEventListener("change", (e) => {
       this.state.pending.batchModelId = e.target.value;
       // 今あるすべての行に、選んだ機種をまとめて反映する
@@ -1149,6 +1154,55 @@ const App = {
     this.state.pending.batchModelId = "";
     this.renderInputScreen();
     this.toast(`${savedDate}のデータとして${savedCount}件保存しました${skipped ? `(${skipped}件はスキップ)` : ""}`);
+  },
+
+  // 対象日に保存済みのデータがあれば件数をヒントに表示し、読み込みボタンを出す。
+  async refreshExistingDataHint() {
+    const store = this.currentStore();
+    const date = this.state.pending.date;
+    const hintEl = document.getElementById("existing-data-hint");
+    const btnEl = document.getElementById("load-existing-btn");
+    if (!store || !date || !hintEl || !btnEl) return;
+    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
+    const count = allRecords.filter((r) => r.date === date).length;
+    if (count > 0) {
+      hintEl.textContent = `${date}の保存済みデータが${count}件あります。修正したい場合は読み込んでから編集・保存してください。`;
+      btnEl.hidden = false;
+    } else {
+      hintEl.textContent = "";
+      btnEl.hidden = true;
+    }
+  },
+
+  // 保存済みのデータを、値を保持したまま確認・修正テーブルに読み込む(既存の値をうっかり消さずに修正できるようにする)。
+  async loadExistingRecordsForEdit() {
+    const store = this.currentStore();
+    const date = this.state.pending.date;
+    if (!store || !date) return;
+    const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
+    const recordsForDate = allRecords.filter((r) => r.date === date);
+    if (!recordsForDate.length) {
+      this.toast("この日の保存済みデータはありません");
+      return;
+    }
+    const existingNumbers = new Set(this.state.pending.results.map((r) => Number(r.number)));
+    let loaded = 0;
+    recordsForDate.forEach((rec) => {
+      const machine = this.machines.find((m) => m.id === rec.machineId);
+      if (!machine || existingNumbers.has(machine.number)) return;
+      this.state.pending.results.push({
+        number: machine.number,
+        totalSpins: rec.totalSpins,
+        big: rec.big,
+        reg: rec.reg,
+        diff: rec.diff,
+        _chosenModelId: machine.modelId,
+      });
+      loaded++;
+    });
+    document.getElementById("review-section").hidden = this.state.pending.results.length === 0;
+    this.renderReviewTable();
+    this.toast(`${loaded}件を読み込みました`);
   },
 
   // ---------- 設定 ----------
