@@ -186,8 +186,11 @@ ${JSON.stringify(payload.eventDayHistory)}
 # 直近の通常営業データ(対象日の直前)
 ${JSON.stringify(payload.recentRegularDays)}`;
 
+    // 傾向分析は店舗のクセという込み入った推論が必要なため、推論力の高いOpusを使う
+    // (スクショのOCR抽出はHaikuのままで十分なので、extractFromImage側は変更していない)。
+    // Opus 5.5はOpus 5より新しく、かつ安い($4/$20 per MTok vs $5/$25)ためこちらを使う。
     const content = [{ type: "text", text: instructions }];
-    const input = await this.callTool("claude-haiku-4-5", tool, content);
+    const input = await this.callTool("claude-opus-5-5", tool, content);
     if (!Array.isArray(input.recommendations)) {
       throw new Error("分析結果を読み取れませんでした");
     }
