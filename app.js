@@ -550,10 +550,12 @@ const App = {
   },
 
   // 日ごとの累計収支を折れ線グラフ(SVG)で描画する。
+  // スマホの狭い画面でも横に切れず全体が見えるよう、固定ピクセル幅ではなくviewBoxで
+  // 比率だけ決め、実際の表示サイズはCSS側(width:100%)でコンテナに合わせて拡縮する。
   balanceChartSvg(rows) {
-    const width = 720;
-    const height = 220;
-    const padding = { top: 16, right: 16, bottom: 12, left: 56 };
+    const width = 360;
+    const height = 200;
+    const padding = { top: 16, right: 12, bottom: 12, left: 48 };
     const innerW = width - padding.left - padding.right;
     const innerH = height - padding.top - padding.bottom;
 
@@ -578,24 +580,22 @@ const App = {
       .map((p, i) => {
         const sign = p.daily >= 0 ? "+" : "";
         const cumSign = p.cum >= 0 ? "+" : "";
-        return `<circle cx="${xFor(i)}" cy="${yFor(p.cum)}" r="3.5" fill="var(--brand)"><title>${esc(p.date)}: 当日${sign}${p.daily.toLocaleString()} / 累計${cumSign}${p.cum.toLocaleString()}</title></circle>`;
+        return `<circle cx="${xFor(i)}" cy="${yFor(p.cum)}" r="3" fill="var(--brand)"><title>${esc(p.date)}: 当日${sign}${p.daily.toLocaleString()} / 累計${cumSign}${p.cum.toLocaleString()}</title></circle>`;
       })
       .join("");
 
     const last = points[points.length - 1];
     const lastSign = last.cum >= 0 ? "+" : "";
-    const lastLabel = `<text x="${xFor(points.length - 1) - 4}" y="${yFor(last.cum) - 8}" font-size="11" text-anchor="end" fill="var(--text-secondary)">${lastSign}${last.cum.toLocaleString()}</text>`;
+    const lastLabel = `<text x="${xFor(points.length - 1) - 4}" y="${yFor(last.cum) - 8}" font-size="10" text-anchor="end" fill="var(--text-secondary)">${lastSign}${last.cum.toLocaleString()}</text>`;
 
     return `
-      <div style="overflow-x:auto">
-        <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="累計収支の推移">
-          <line x1="${padding.left}" y1="${zeroY}" x2="${width - padding.right}" y2="${zeroY}" stroke="var(--border)" stroke-dasharray="4 4" />
-          <text x="${padding.left - 8}" y="${zeroY + 4}" font-size="10" text-anchor="end" fill="var(--text-muted)">0</text>
-          <polyline points="${linePoints}" fill="none" stroke="var(--brand)" stroke-width="2" />
-          ${circles}
-          ${lastLabel}
-        </svg>
-      </div>`;
+      <svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;display:block" role="img" aria-label="累計収支の推移">
+        <line x1="${padding.left}" y1="${zeroY}" x2="${width - padding.right}" y2="${zeroY}" stroke="var(--border)" stroke-dasharray="4 4" />
+        <text x="${padding.left - 8}" y="${zeroY + 4}" font-size="9" text-anchor="end" fill="var(--text-muted)">0</text>
+        <polyline points="${linePoints}" fill="none" stroke="var(--brand)" stroke-width="2" />
+        ${circles}
+        ${lastLabel}
+      </svg>`;
   },
 
   // ---------- イベント日(特定日) ----------
