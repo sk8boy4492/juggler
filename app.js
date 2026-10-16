@@ -723,7 +723,7 @@ const App = {
       </section>
       <section class="card">
         <h2>AIによる傾向分析</h2>
-        <p class="hint">過去の同条件日のデータをAIに渡し、店舗固有の傾向やクセを決めつけずに読み取ってもらいます。実行のたびに少額のAPI利用料がかかります。</p>
+        <p class="hint">この日に該当するイベント日の過去実績(あれば)と、イベント日かどうかに関係なく対象日直前の通常営業データをAIに渡し、店舗固有の傾向やクセを決めつけずに読み取ってもらいます(回されていない/出ていない台が次のイベント日に設定を入れられやすい、といった傾向も見られます)。実行のたびに少額のAPI利用料がかかります。</p>
         <button type="button" class="btn" id="ai-analyze-btn">AIに分析してもらう</button>
         <div id="ai-analysis-wrap"></div>
       </section>
@@ -839,14 +839,32 @@ const App = {
     historyWrap.innerHTML = historyHtml;
   },
 
+  // 指定した日のレコードを、設定推定つきのAI分析用エントリー配列に変換する。
+  buildDateEntries(date, allRecords, weights) {
+    return allRecords
+      .filter((r) => r.date === date)
+      .map((r) => {
+        const machine = this.machines.find((m) => m.id === r.machineId);
+        const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
+        const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
+        const expected = Analysis.expectedSetting(probs);
+        return {
+          number: machine ? machine.number : null,
+          model: model ? model.name : null,
+          totalSpins: r.totalSpins,
+          big: r.big,
+          reg: r.reg,
+          diff: r.diff,
+          estimatedExpectedSetting: expected != null ? Number(expected.toFixed(2)) : null,
+        };
+      })
+      .filter((e) => e.number != null);
+  },
+
   async runAiTrendAnalysis() {
     const store = this.currentStore();
     const targetDate = document.getElementById("tomorrow-date").value;
     const matched = Events.matchingRules(targetDate, this.eventRules);
-    if (!matched.length) {
-      this.toast("この日に該当するイベント日がありません");
-      return;
-    }
     if (!ClaudeApi.hasApiKey()) {
       this.toast("設定画面でClaude APIキーを入力してください");
       return;
@@ -865,47 +883,49 @@ const App = {
 
     try {
       const allRecords = await DB.getAllByIndex(DB.STORES.records, "storeId", store.id);
-      const availableDates = Array.from(new Set(allRecords.map((r) => r.date)));
+      const availableDates = Array.from(new Set(allRecords.map((r) => r.date))).sort();
       const weights = Analysis.loadWeights();
-
-      const pastDatesSet = new Set();
-      matched.forEach((rule) => {
-        Events.pastMatchingDates(rule, availableDates, targetDate).forEach((d) => pastDatesSet.add(d));
-      });
-      const sortedPastDates = Array.from(pastDatesSet).sort();
-
-      if (!sortedPastDates.length) {
-        resultWrap.innerHTML = '<p class="hint">過去のデータがまだないため、分析できません。</p>';
-        return;
-      }
 
       // データが長期間蓄積してもAPIコスト・応答時間が際限なく増えないよう、直近の分だけを分析対象にする。
       // 新しいクセほど現在の傾向に近いはずなので、古いデータを削るのは精度の面でも合理的。
-      const MAX_PAST_DATES = 20;
-      const pastDates = sortedPastDates.slice(-MAX_PAST_DATES);
-      const omittedCount = sortedPastDates.length - pastDates.length;
+      const MAX_PAST_EVENT_DATES = 20;
+      // イベント日の前後、および対象日の直前にどれくらい「通常営業時のデータ」を含めるか。
+      // 回されていない/出ていない台が次のイベント日に設定を入れられやすい、という傾向を
+      // AIが読み取れるようにするため、イベント日のデータだけでなくこの期間も渡す。
+      const LEAD_UP_WINDOW_DAYS = 7;
 
-      const history = pastDates.map((d) => {
-        const entries = allRecords
-          .filter((r) => r.date === d)
-          .map((r) => {
-            const machine = this.machines.find((m) => m.id === r.machineId);
-            const model = machine ? this.models.find((mo) => mo.id === machine.modelId) : null;
-            const probs = model ? Analysis.estimateSettingLikelihoods(r, model.specs, weights) : null;
-            const expected = Analysis.expectedSetting(probs);
-            return {
-              number: machine ? machine.number : null,
-              model: model ? model.name : null,
-              totalSpins: r.totalSpins,
-              big: r.big,
-              reg: r.reg,
-              diff: r.diff,
-              estimatedExpectedSetting: expected != null ? Number(expected.toFixed(2)) : null,
-            };
-          })
-          .filter((e) => e.number != null);
-        return { date: d, entries };
-      });
+      let eventDayHistory = [];
+      let omittedEventCount = 0;
+      if (matched.length) {
+        const pastDatesSet = new Set();
+        matched.forEach((rule) => {
+          Events.pastMatchingDates(rule, availableDates, targetDate).forEach((d) => pastDatesSet.add(d));
+        });
+        const sortedPastDates = Array.from(pastDatesSet).sort();
+        const pastDates = sortedPastDates.slice(-MAX_PAST_EVENT_DATES);
+        omittedEventCount = sortedPastDates.length - pastDates.length;
+
+        eventDayHistory = pastDates.map((d) => {
+          const leadUpCutoff = Events.addDays(d, -LEAD_UP_WINDOW_DAYS);
+          const leadUpDates = availableDates.filter((x) => x < d && x >= leadUpCutoff);
+          return {
+            eventDate: d,
+            entries: this.buildDateEntries(d, allRecords, weights),
+            leadUpDays: leadUpDates.map((x) => ({ date: x, entries: this.buildDateEntries(x, allRecords, weights) })),
+          };
+        });
+      }
+
+      // イベント日かどうかに関係なく、対象日の直前の通常営業時データ(今まさに回されていない/
+      // 出ていない台がないかをAIが見られるようにする)。
+      const recentCutoff = Events.addDays(targetDate, -LEAD_UP_WINDOW_DAYS);
+      const recentDates = availableDates.filter((x) => x < targetDate && x >= recentCutoff);
+      const recentRegularDays = recentDates.map((d) => ({ date: d, entries: this.buildDateEntries(d, allRecords, weights) }));
+
+      if (!eventDayHistory.length && !recentRegularDays.length) {
+        resultWrap.innerHTML = '<p class="hint">過去のデータがまだないため、分析できません。</p>';
+        return;
+      }
 
       const registeredMachines = this.machines
         .slice()
@@ -915,13 +935,23 @@ const App = {
           return { number: m.number, model: model ? model.name : null };
         });
 
-      const ruleDescription = matched.map((r) => `${r.name}(${Events.describeRule(r)})`).join("、");
+      const ruleDescription = matched.length
+        ? matched.map((r) => `${r.name}(${Events.describeRule(r)})`).join("、")
+        : "登録されたイベント日のルールには一致しない日(通常営業時の直近データから判断)";
 
-      const result = await ClaudeApi.analyzeTrend({ ruleDescription, targetDate, registeredMachines, history });
+      const result = await ClaudeApi.analyzeTrend({
+        ruleDescription,
+        targetDate,
+        registeredMachines,
+        eventDayHistory,
+        recentRegularDays,
+      });
       resultWrap.innerHTML = `
-        <p class="hint">直近${pastDates.length}回分のデータで分析しました${
-        omittedCount ? `(古い${omittedCount}回分は対象外)` : ""
-      }。</p>
+        <p class="hint">${
+          eventDayHistory.length ? `イベント日の過去実績${eventDayHistory.length}回分` : "イベント日の過去実績なし"
+        }${omittedEventCount ? `(古い${omittedEventCount}回分は対象外)` : ""}と、直近の通常営業データ${
+        recentRegularDays.length
+      }日分で分析しました。</p>
         <div class="ai-summary">${esc(result.summary).replace(/\n/g, "<br>")}</div>
         <h3>AIのおすすめ台</h3>
         <div class="table-scroll">
